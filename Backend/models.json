@@ -1,0 +1,30 @@
+{
+    "printer_models": [
+        {
+            "id": "COREONE",
+            "name": "Prusa CORE One",
+            "technology": "FFF",
+            "variants": [
+                {
+                    "name": "HF0.4",
+                    "printer_profiles": [
+                        {
+                            "name": "Prusa CORE One HF0.4 nozzle",
+                            "extruders_cnt": 1,
+                            "bed": {
+                                "type": "Rectangle",
+                                "width": 250,
+                                "height": 220,
+                                "origin": "[0, 0]",
+                                "max_print_height": 270
+                            }
+                        }
+                    ]
+                }
+            ],
+            "vendor_name": "Prusa Research",
+            "vendor_id": "PrusaResearch"
+        }
+    ]
+}
+

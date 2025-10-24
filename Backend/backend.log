@@ -1,0 +1,334 @@
+2025-10-14 08:57:34,941 INFO main: [STARTUP] version=v2 storage=s3 uploads_dir=C:\Users\apich\Documents\Wil Project\Backend\uploads preview=none gpu_enabled=False log_file=C:\Users\apich\Documents\Wil Project\Backend\backend.log log_level=INFO
+2025-10-14 08:58:37,982 INFO printer_status: [WEBHOOK] recv event=printdone printer=prusa-core-one progress=100 state=None
+2025-10-14 08:58:37,988 INFO printer_status: [WEBHOOK] mapped -> state=ready progress=100.00
+2025-10-14 08:58:37,993 INFO printer_status: [WEBHOOK] job #48 -> completed
+2025-10-14 08:58:37,993 INFO printer_status: [WEBHOOK] PrintDone → job_id=48 completed
+2025-10-14 08:58:37,996 INFO printer_status: [DEBUG] calling internal process-next for prusa-core-one/queue/process-next?force=1
+2025-10-14 08:58:56,952 INFO print_queue: Dispatch job 49 to OctoPrint | src=catalog/Hontech/HT_LimitSwitch_V1/Limit Switch - Part 1_oriented.gcode
+2025-10-14 08:58:57,222 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 08:58:57,223 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"started","jobId":49}
+2025-10-14 08:58:57,223 INFO printer_status: [AUTO-CHAIN] printdone → process-next: {'ok': True, 'message': 'started', 'jobId': 49}
+2025-10-14 08:58:57,779 INFO httpx: HTTP Request: GET http://127.0.0.1:9000/printer-store/catalog/Hontech/HT_LimitSwitch_V1/Limit%20Switch%20-%20Part%201_oriented.gcode?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20251014%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251014T015857Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=7a532d018b0e6d17e9fb6f9bf2921c824bc5b3a4609529a7f6340e58a59383b3 "HTTP/1.1 200 OK"
+2025-10-14 08:58:57,795 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:58:58,075 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:58:58,075 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 08:58:58,081 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 08:58:58,081 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 08:58:58,082 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 08:58:58,082 INFO printer_status: [DEBUG] calling internal process-next for prusa-core-one/queue/process-next?force=1
+2025-10-14 08:58:58,353 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 08:58:58,354 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 08:58:58,355 INFO httpx: HTTP Request: GET http://127.0.0.1:8001/printers/prusa-core-one/octoprint/job?force=true "HTTP/1.1 200 OK"
+2025-10-14 08:58:58,355 INFO printer_status: [SYNC] forced poll after printdone
+2025-10-14 08:59:00,137 INFO httpx: HTTP Request: POST http://172.20.10.2:5000/api/files/local?select=true&print=true "HTTP/1.1 201 CREATED"
+2025-10-14 08:59:00,137 INFO print_queue: OctoPrint: uploaded & started Limit_Switch_-_Part_1_oriented.gcode
+2025-10-14 08:59:05,617 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 08:59:05,654 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:05,675 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:05,676 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:05,685 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:05,686 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:08,183 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:08,205 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:08,206 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:08,211 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:08,211 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:10,598 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:10,614 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:10,614 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:10,618 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:10,619 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:12,992 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:13,029 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:13,030 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:13,035 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:13,036 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:15,413 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:15,423 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:15,424 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:15,429 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:15,430 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:17,802 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:17,813 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:17,814 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 08:59:17,817 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 08:59:17,818 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:20,192 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:20,203 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:20,204 INFO printer_status: [OCTO] raw state=Printing progress=0.1385866684168808
+2025-10-14 08:59:20,209 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.14
+2025-10-14 08:59:20,210 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 08:59:52,919 INFO print_queue: Dispatch job 50 to OctoPrint | src=catalog/Hontech/HT_NocturneCam_V1/Core One Nocturne Camera Mount_oriented.gcode
+2025-10-14 08:59:53,206 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 08:59:53,207 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:53,257 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:53,261 INFO printer_status: [OCTO] raw state=Printing progress=0.6262485001169614
+2025-10-14 08:59:53,266 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.63
+2025-10-14 08:59:53,267 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=0.63
+2025-10-14 08:59:53,267 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 08:59:53,268 INFO httpx: HTTP Request: GET http://127.0.0.1:9000/printer-store/catalog/Hontech/HT_NocturneCam_V1/Core%20One%20Nocturne%20Camera%20Mount_oriented.gcode?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20251014%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251014T015953Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=76bac909bc6cbc1e010bc0c6ee4c2dc91de4fcf072e0af7228f9ada39b552a24 "HTTP/1.1 200 OK"
+2025-10-14 08:59:54,201 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:54,329 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:54,330 INFO printer_status: [OCTO] raw state=Printing progress=17.841918638602657
+2025-10-14 08:59:54,336 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=17.84
+2025-10-14 08:59:54,336 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=17.84
+2025-10-14 08:59:54,337 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 08:59:54,338 INFO httpx: HTTP Request: POST http://172.20.10.2:5000/api/files/local?select=true&print=true "HTTP/1.1 201 CREATED"
+2025-10-14 08:59:54,338 INFO print_queue: OctoPrint: uploaded & started Core_One_Nocturne_Camera_Mount_oriented.gcode
+2025-10-14 08:59:56,743 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:56,751 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:56,752 INFO printer_status: [OCTO] raw state=Printing progress=19.39392944954082
+2025-10-14 08:59:56,758 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=19.39
+2025-10-14 08:59:56,759 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=19.39
+2025-10-14 08:59:56,759 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 08:59:59,291 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 08:59:59,330 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 08:59:59,331 INFO printer_status: [OCTO] raw state=Printing progress=20.82464537127259
+2025-10-14 08:59:59,339 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=20.82
+2025-10-14 08:59:59,339 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=20.82
+2025-10-14 08:59:59,340 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:01,890 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:01,912 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:01,913 INFO printer_status: [OCTO] raw state=Printing progress=22.284980301676335
+2025-10-14 09:00:01,920 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=22.28
+2025-10-14 09:00:01,921 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=22.28
+2025-10-14 09:00:01,921 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:04,505 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:04,541 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:04,542 INFO printer_status: [OCTO] raw state=Printing progress=23.73067401756609
+2025-10-14 09:00:04,549 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=23.73
+2025-10-14 09:00:04,550 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=23.73
+2025-10-14 09:00:04,550 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:07,138 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:07,170 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:07,171 INFO printer_status: [OCTO] raw state=Printing progress=25.191471744980337
+2025-10-14 09:00:07,178 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=25.19
+2025-10-14 09:00:07,179 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=25.19
+2025-10-14 09:00:07,179 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:09,705 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:09,718 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:09,719 INFO printer_status: [OCTO] raw state=Printing progress=26.655887703567576
+2025-10-14 09:00:09,727 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=26.66
+2025-10-14 09:00:09,728 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=26.66
+2025-10-14 09:00:09,728 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:12,171 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:12,181 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:12,182 INFO printer_status: [OCTO] raw state=Printing progress=27.86496592972554
+2025-10-14 09:00:12,208 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=27.86
+2025-10-14 09:00:12,209 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=27.86
+2025-10-14 09:00:12,210 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:14,732 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:14,759 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:14,760 INFO printer_status: [OCTO] raw state=Printing progress=29.052292696390015
+2025-10-14 09:00:14,766 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=29.05
+2025-10-14 09:00:14,767 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=29.05
+2025-10-14 09:00:14,768 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:00:17,328 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:00:17,345 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:00:17,345 INFO printer_status: [OCTO] raw state=Printing progress=30.064093178708646
+2025-10-14 09:00:17,351 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=30.06
+2025-10-14 09:00:17,352 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=30.06
+2025-10-14 09:00:17,353 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:11,670 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:11,705 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:11,706 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:11,706 INFO printer_status: [OCTO] raw state=Printing progress=92.40617421698954
+2025-10-14 09:02:11,712 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=92.41
+2025-10-14 09:02:11,712 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=92.41
+2025-10-14 09:02:11,712 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:11,729 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:11,730 INFO printer_status: [OCTO] raw state=Printing progress=92.40857234695304
+2025-10-14 09:02:11,734 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=92.41
+2025-10-14 09:02:11,735 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=92.41
+2025-10-14 09:02:11,735 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:17,800 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:17,839 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:17,840 INFO printer_status: [OCTO] raw state=Printing progress=96.25193322933022
+2025-10-14 09:02:17,845 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=96.25
+2025-10-14 09:02:17,846 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=96.25
+2025-10-14 09:02:17,846 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:20,296 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:20,321 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:20,322 INFO printer_status: [OCTO] raw state=Printing progress=97.77108545252293
+2025-10-14 09:02:20,328 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=97.77
+2025-10-14 09:02:20,328 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=97.77
+2025-10-14 09:02:20,328 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:22,799 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:22,822 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:22,823 INFO printer_status: [OCTO] raw state=Printing progress=98.89660778205794
+2025-10-14 09:02:22,830 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=98.90
+2025-10-14 09:02:22,831 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=98.90
+2025-10-14 09:02:22,831 INFO printer_status: [AUTO-CHAIN] hold: still printing
+2025-10-14 09:02:25,373 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:25,397 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:25,398 INFO printer_status: [OCTO] raw state=Printing progress=99.50426025684392
+2025-10-14 09:02:25,406 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=99.50
+2025-10-14 09:02:25,407 INFO printer_status: [AUTO-CHAIN] decide: state=printing progress=99.50
+2025-10-14 09:02:25,407 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:02:25,407 INFO printer_status: [DEBUG] calling internal process-next for prusa-core-one/queue/process-next?force=1
+2025-10-14 09:02:55,759 INFO print_queue: Dispatch job 51 to OctoPrint | src=catalog/Hontech/HT_CamMount_V1/Camera Mounting_oriented.gcode
+2025-10-14 09:02:56,026 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:02:56,031 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"started","jobId":51}
+2025-10-14 09:02:56,352 INFO httpx: HTTP Request: GET http://127.0.0.1:9000/printer-store/catalog/Hontech/HT_CamMount_V1/Camera%20Mounting_oriented.gcode?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20251014%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251014T020256Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=d14b5d047ee6007aff9e73381ffb1d60feea08dec48b52c4d1e4d0217a8b43a8 "HTTP/1.1 200 OK"
+2025-10-14 09:02:56,673 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:56,701 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:56,702 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:02:56,707 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:02:56,708 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:02:56,708 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:02:56,708 INFO printer_status: [DEBUG] calling internal process-next for prusa-core-one/queue/process-next?force=1
+2025-10-14 09:02:56,990 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:02:56,990 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 09:02:57,093 INFO httpx: HTTP Request: POST http://172.20.10.2:5000/api/files/local?select=true&print=true "HTTP/1.1 201 CREATED"
+2025-10-14 09:02:57,094 INFO print_queue: OctoPrint: uploaded & started Camera_Mounting_oriented.gcode
+2025-10-14 09:02:58,456 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:02:58,474 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:02:58,475 INFO printer_status: [OCTO] raw state=Printing progress=0.06975403178303706
+2025-10-14 09:02:58,479 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.07
+2025-10-14 09:02:58,480 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:00,881 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:00,919 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:00,920 INFO printer_status: [OCTO] raw state=Printing progress=0.06975403178303706
+2025-10-14 09:03:00,925 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.07
+2025-10-14 09:03:00,926 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:03,450 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:03,476 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:03,476 INFO printer_status: [OCTO] raw state=Printing progress=0.06975403178303706
+2025-10-14 09:03:03,483 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.07
+2025-10-14 09:03:03,484 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:06,040 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:06,074 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:06,075 INFO printer_status: [OCTO] raw state=Printing progress=0.5282705340368674
+2025-10-14 09:03:06,082 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.53
+2025-10-14 09:03:06,083 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:08,610 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:08,637 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:08,638 INFO printer_status: [OCTO] raw state=Printing progress=1.4932013070355468
+2025-10-14 09:03:08,644 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=1.49
+2025-10-14 09:03:08,645 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:10,273 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:03:11,172 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:11,196 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:11,196 INFO printer_status: [OCTO] raw state=Printing progress=3.3381179432171177
+2025-10-14 09:03:11,204 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=3.34
+2025-10-14 09:03:11,205 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:13,756 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:13,773 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:13,773 INFO printer_status: [OCTO] raw state=Printing progress=5.414307946999337
+2025-10-14 09:03:13,780 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=5.41
+2025-10-14 09:03:13,781 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:16,343 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:16,362 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:16,363 INFO printer_status: [OCTO] raw state=Printing progress=8.063256056200048
+2025-10-14 09:03:16,371 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=8.06
+2025-10-14 09:03:16,372 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:18,914 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:03:18,932 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:03:18,933 INFO printer_status: [OCTO] raw state=Printing progress=10.722899783607492
+2025-10-14 09:03:18,940 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=10.72
+2025-10-14 09:03:18,941 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:03:25,163 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:03:42,627 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:03:57,809 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:04:15,276 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:04:30,370 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:04:47,775 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:05:02,787 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:05:20,267 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:05:35,160 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:05:52,612 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:06:07,793 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:06:10,959 INFO main: [STARTUP] version=v2 storage=s3 uploads_dir=C:\Users\apich\Documents\Wil Project\Backend\uploads preview=none gpu_enabled=False log_file=C:\Users\apich\Documents\Wil Project\Backend\backend.log log_level=INFO
+2025-10-14 09:06:25,303 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:06:26,804 INFO main: [STARTUP] version=v2 storage=s3 uploads_dir=C:\Users\apich\Documents\Wil Project\Backend\uploads preview=none gpu_enabled=False log_file=C:\Users\apich\Documents\Wil Project\Backend\backend.log log_level=INFO
+2025-10-14 09:06:40,421 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:06:57,729 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:07:12,773 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:07:30,274 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:07:45,411 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:08:02,708 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:08:17,933 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:08:35,271 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:08:50,304 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:09:07,574 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:09:22,860 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:09:28,373 INFO main: [STARTUP] version=v2 storage=s3 uploads_dir=C:\Users\apich\Documents\Wil Project\Backend\uploads preview=none gpu_enabled=False log_file=C:\Users\apich\Documents\Wil Project\Backend\backend.log log_level=INFO
+2025-10-14 09:09:40,127 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:09:45,237 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:09:45,253 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:09:45,254 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:09:45,263 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:09:45,265 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:09:45,265 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:09:45,266 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:09:45,726 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:09:45,727 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 09:09:47,280 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:09:47,309 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:09:47,310 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:09:47,315 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:09:47,315 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:09:47,316 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:09:47,316 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:09:47,641 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:09:47,642 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 09:09:55,108 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:10:12,591 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:10:27,762 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:10:45,112 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:10:57,831 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:10:57,853 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:10:57,853 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:10:57,859 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:10:57,860 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:10:57,860 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:10:57,860 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:10:58,158 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:10:58,159 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 09:11:00,341 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next "HTTP/1.1 200 OK"
+2025-10-14 09:11:00,734 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:00,754 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:00,754 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:11:00,759 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:11:00,759 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:11:00,759 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:11:00,760 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:11:01,097 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:11:01,097 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"no-job"}
+2025-10-14 09:11:03,720 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:03,833 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:03,834 INFO printer_status: [OCTO] raw state=Operational progress=100.0
+2025-10-14 09:11:03,841 INFO printer_status: [AUTO-CHAIN] check: state=ready progress=100.00
+2025-10-14 09:11:03,843 INFO printer_status: [AUTO-CHAIN] skip: no processing job
+2025-10-14 09:11:03,843 INFO printer_status: [AUTO-CHAIN] decide: state=ready progress=100.00
+2025-10-14 09:11:03,843 INFO printer_status: [AUTO-CHAIN] trigger → process-next (force)
+2025-10-14 09:11:33,856 INFO print_queue: Dispatch job 52 to OctoPrint | src=catalog/Hontech/HT_LimitSwitch_V1/Limit Switch - Part 1_oriented.gcode
+2025-10-14 09:11:34,118 INFO httpx: HTTP Request: POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 "HTTP/1.1 200 OK"
+2025-10-14 09:11:34,119 INFO printer_status: [AUTO-CHAIN] POST http://127.0.0.1:8001/internal/printers/prusa-core-one/queue/process-next?force=1 -> 200 {"ok":true,"message":"started","jobId":52}
+2025-10-14 09:11:34,173 INFO httpx: HTTP Request: GET http://127.0.0.1:9000/printer-store/catalog/Hontech/HT_LimitSwitch_V1/Limit%20Switch%20-%20Part%201_oriented.gcode?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20251014%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20251014T021134Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=37221c0e6160b4536685a8fe00c3171d0fe78bac7c87f1f0550ade831bb0d5b6 "HTTP/1.1 200 OK"
+2025-10-14 09:11:36,193 INFO httpx: HTTP Request: POST http://172.20.10.2:5000/api/files/local?select=true&print=true "HTTP/1.1 201 CREATED"
+2025-10-14 09:11:36,193 INFO print_queue: OctoPrint: uploaded & started Limit_Switch_-_Part_1_oriented.gcode
+2025-10-14 09:11:42,187 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:42,212 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:42,213 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:42,218 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 09:11:42,221 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:42,238 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:42,239 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:42,243 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 09:11:44,704 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:44,735 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:44,735 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:44,740 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 09:11:47,353 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:47,362 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:47,363 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:47,368 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 09:11:49,916 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:49,944 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:49,945 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:49,951 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02
+2025-10-14 09:11:52,549 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/job "HTTP/1.1 200 OK"
+2025-10-14 09:11:52,565 INFO httpx: HTTP Request: GET http://172.20.10.2:5000/api/printer "HTTP/1.1 200 OK"
+2025-10-14 09:11:52,567 INFO printer_status: [OCTO] raw state=Printing progress=0.020783793016982126
+2025-10-14 09:11:52,572 INFO printer_status: [AUTO-CHAIN] check: state=printing progress=0.02

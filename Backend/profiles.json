@@ -1,0 +1,110 @@
+{
+    "printer_profile": "Prusa CORE One HF0.4 nozzle",
+    "print_profiles": [
+        {
+            "name": "0.10mm FAST DETAIL @COREONE 0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.15mm SPEED @COREONE HF0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.15mm STRUCTURAL @COREONE 0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.20mm SPEED @COREONE HF0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.20mm STRUCTURAL @COREONE 0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.25mm SPEED @COREONE HF0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.25mm STRUCTURAL @COREONE HF0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        },
+        {
+            "name": "0.28mm DRAFT @COREONE HF0.4",
+            "filament_profiles": [
+                "Generic PETG @COREONE HF0.4",
+                "Generic PLA @COREONE HF0.4",
+                "Generic PLA Silk @COREONE",
+                "Prusament ASA @COREONE HF0.4",
+                "Prusament PC Blend @COREONE HF0.4",
+                "Prusament PETG @COREONE HF0.4",
+                "Prusament PLA @COREONE HF0.4",
+                "Prusament PLA Blend @COREONE"
+            ]
+        }
+    ]
+}
+

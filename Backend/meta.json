@@ -1,0 +1,22 @@
+{
+  "part_id": "HD_CamMount_V1",
+  "part_name": "Camera Mount",
+  "machine_type": "Hontec",
+  "category": "Mount",
+  "version": "V1",
+  "description": "",
+  "materials": ["PETG"],
+  "recommended": {
+    "layer_height_mm": 0.2
+  },
+  "files": {
+    "gcode": "catalog/Hontec/HD_CamMount_V1/Camera Mounting.gcode",
+    "preview_png": "catalog/Hontec/HD_CamMount_V1/snap.png"
+  },
+  "tags": ["camera","mount"],
+  "owner": "user42",
+  "uploaded_at": "2025-09-16T02:33:17Z",
+  "filament_mm": 1740.94,
+  "filament_g": 0.0,
+  "estimated_time": "18m 56s"
+}
