@@ -1,0 +1,320 @@
+/* ---------- Layout ---------- */
+.printing-page{
+  position: relative;                 /* ให้ FAB อ้างอิงได้ */
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 8px 4px 24px;
+}
+
+/* ---------- Table ---------- */
+.printing-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 14px;             /* ให้แต่ละแถวลอยแยกกัน */
+}
+.printing-table thead th{
+  text-align: left;
+  font-weight: 600;
+  color: #666;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+.printing-table tbody tr{
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  border-radius: 12px;
+  overflow: hidden;                    /* ให้ขอบการ์ดตัดของที่ล้น */
+}
+.printing-table td{
+  padding: 18px 16px;
+  vertical-align: middle;
+  font-size: 16px;
+}
+
+/* Part cell */
+.part-cell{ display:flex; align-items:center; gap:14px; }
+.part-img{
+  width: 72px; height: 72px; object-fit: cover;
+  border-radius: 8px; margin-right: 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+}
+.part-meta{ display:flex; flex-direction:column; line-height:1.2; }
+.part-id{ color:#777; font-weight:600; margin-bottom:2px; }
+.part-name{ font-size:20px; font-weight:700; color:#222; }
+.owner-name{ font-size:12px; color:#6b7280; font-weight:600; margin-top:2px; }
+
+/* ---------- Badges (Status) ---------- */
+.status{
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:140px; padding:10px 16px; border-radius:999px;
+  font-weight:600; font-size:14px;
+}
+.status.processing{ background:#e6f0ff; color:#0b5ecf; border:1px solid #bcd3ff; }
+.status.next{        background:#f1f1f1; color:#444;   border:1px solid #e6e6e6; }
+.status.paused{      background:#fff4e6; color:#a85600; border:1px solid #ffd9a8; }
+
+/* ---------- Waiting time ---------- */
+.waiting-time{ font-size:18px; font-weight:700; }
+.td-right{ text-align:right; }
+
+/* ========== Cancel Button — colors as reference ========== */
+:root{
+  --cancel-red:       #C40B0B; /* default */
+  --cancel-red-hover: #6F0000; /* hover  */
+  --cancel-gray-bg:   #9A9A9A; /* disabled bg */
+  --cancel-gray-text: #3D3D3D; /* disabled text */
+}
+
+/* base (reduced size + weight) */
+.btn-cancel{
+  min-width: 116px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: none;
+  background: #f6f6f6;               /* จะถูก override เมื่อเป็น .red หรือ :disabled */
+  color: #111;
+  font-weight: 600;                   /* เดิม 800 → เบาลง */
+  font-size: 16px;                    /* เดิม 18px → เล็กลง */
+  line-height: 40px;
+  cursor: pointer;
+  transition: background .15s ease, transform .06s ease;
+}
+.btn-cancel:active{ transform: translateY(1px); }
+
+/* enabled (red) */
+.btn-cancel.red{
+  background: var(--cancel-red);
+  color: #fff;
+}
+.btn-cancel.red:hover{
+  background: var(--cancel-red-hover);
+}
+
+/* focus ring */
+.btn-cancel:focus-visible{
+  outline: 3px solid rgba(11,94,207,.25);
+  outline-offset: 2px;
+}
+
+/* disabled (gray) */
+.btn-cancel:disabled{
+  background: var(--cancel-gray-bg);
+  color: var(--cancel-gray-text);
+  cursor: not-allowed;
+  opacity: 1;
+  box-shadow: none;
+}
+.btn-cancel:disabled:hover{ background: var(--cancel-gray-bg); }
+
+/* ---------- FAB (+ Print file) ---------- */
+.btn-print{
+  position: fixed;
+  right: clamp(12px, 2vw, 24px);
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  z-index: 1100;
+  padding: 12px 22px; border-radius: 999px; border: 0;
+  background:#0B5ECF; color:#fff; font-weight:800; cursor:pointer;
+  box-shadow:0 2px 8px rgba(11,94,207,.25);
+  transition: transform .06s ease, filter .15s ease, background .15s ease;
+}
+.btn-print:hover{ filter:brightness(1.05); }
+.btn-print:active{ transform: translateY(1px); }
+
+/* Scrim (คลิกนอกเพื่อปิด) */
+.fab-scrim{
+  position: fixed; inset: 0;
+  background: transparent;
+  z-index: 1190;
+}
+
+/* เมนูลอยเหนือปุ่ม — ปรับตามดีไซน์ใหม่ */
+.fab-menu{
+  position: fixed;
+  right: clamp(12px, 2vw, 24px);
+  bottom: calc(24px + env(safe-area-inset-bottom) + 60px);
+  z-index: 1200;
+  width: 260px;
+  background:#F5F7FB;
+  border-radius:22px;
+  padding:12px 0;
+  box-shadow:0 10px 30px rgba(0,0,0,.18);
+  backdrop-filter: blur(2px);
+  animation: fabIn .12s ease-out both;
+}
+@keyframes fabIn{
+  from{ opacity:0; transform:translateY(6px) scale(.98); }
+  to  { opacity:1; transform:translateY(0)  scale(1); }
+}
+.fab-item{
+  width:100%;
+  height:54px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent;
+  font-weight:800; font-size:17px; color:#2b2b2b; cursor:pointer;
+}
+.fab-item:hover, .fab-item:focus-visible{
+  background: rgba(13,110,253,.06);
+  color:#0B5ECF;
+  outline:none;
+}
+
+/* เส้นคั่นฟ้าไล่จาง (ใช้เหนือ–ใต้ Print History) */
+.fab-sep{
+  height: 2px;
+  margin: 10px 16px;
+  background: linear-gradient(90deg,
+    rgba(13,110,253,0),
+    rgba(13,110,253,.45),
+    rgba(13,110,253,0)
+  );
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+/* ---------- Mark "Your Queue" (งานของฉัน) ---------- */
+.printing-table tbody tr.row-own{ position:relative; }
+.own-cell{ position:relative; }
+.own-bar{
+  position:absolute; left:0; top:0; bottom:0; width:12px;
+  background:#0B5ECF; border-radius: 12px 0 0 12px;
+}
+.your-queue{ color:#0B5ECF; font-size:12px; font-weight:700; margin-bottom:2px; }
+
+/* ไฮไลต์พิเศษงานที่เพิ่งคิว */
+.just-queued{ outline:2px solid rgba(11,94,207,.25); }
+
+/* --- จัดคอลัมน์ Status ให้ตรงหัวข้อ --- */
+.printing-table thead th:nth-child(2),
+.printing-table tbody td:nth-child(2){
+  width: 260px;
+  text-align: center;
+}
+/* เผื่อจอเล็ก – ยกเลิกความกว้างคงที่ */
+@media (max-width: 980px){
+  .printing-table thead th:nth-child(2),
+  .printing-table tbody td:nth-child(2){
+    width: auto;
+    text-align: left;
+  }
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 980px){
+  .printing-table thead{ display:none; }
+  .printing-table, .printing-table tbody, .printing-table tr, .printing-table td{
+    display:block; width:100%;
+  }
+  .printing-table tbody tr{ padding:14px 12px; }
+  .printing-table td{ padding:8px 0; }
+  .td-right{ text-align:left; margin-top:8px; }
+  .btn-cancel{ margin-top:8px; }
+  .btn-print{ left: 12px; right: 12px; }
+}
+
+/* เล็กลงอีกนิดบนจอเล็กมาก */
+@media (max-width: 480px){
+  .btn-cancel{
+    min-width: 104px;
+    height: 36px;
+    line-height: 36px;
+    font-size: 15px;
+    padding: 0 14px;
+  }
+}
+
+/* ลดแอนิเมชันกรณีผู้ใช้ตั้งค่าลดการเคลื่อนไหว */
+@media (prefers-reduced-motion: reduce){
+  .btn-cancel, .btn-print, .fab-menu{ transition: none; animation: none; }
+}
+
+/* ===== Confirm Cancel Modal ===== */
+.modal-scrim{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-card{
+  width: min(520px, 92vw);
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  padding: 28px 24px;
+  text-align: center;
+}
+
+.modal-card h3{
+  margin: 6px 0 18px;
+  font-size: 26px;
+  line-height: 1.25;
+  color: #111827;
+  font-weight: 800;
+}
+
+.modal-actions{
+  margin-top: 10px;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.btn-outline{
+  min-width: 160px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  border: 2px solid #111827;
+  background: #fff;
+  color: #111827;
+  font-weight: 700;
+}
+
+.btn-outline:disabled{ opacity:.6; cursor:not-allowed; }
+
+.btn-danger{
+  min-width: 180px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  border: 2px solid #c1121f;
+  background: #fff;
+  color: #c1121f;
+  font-weight: 800;
+}
+
+.btn-danger:hover:not(:disabled){
+  background: #c1121f;
+  color: #fff;
+}
+
+.btn-danger:disabled{ opacity:.6; cursor:not-allowed; }
+
+/* ===== Reorder affordances (drag & drop) ===== */
+.printing-table tbody tr.can-drag{
+  cursor: grab;
+  user-select: none;
+}
+.printing-table tbody tr.can-drag:active{
+  cursor: grabbing;
+}
+.printing-table tbody tr.can-drag:hover{
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+}
+
+/* แถวที่กำลัง Processing — ห้ามลาก/ห้ามปล่อย */
+.printing-table tbody tr.lock-proc{
+  cursor: default;         /* ไม่แสดง not-allowed */
+  opacity: 1;              /* ไม่ต้องจาง */
+  box-shadow: inherit;     /* ใช้เงาตามปกติ */
+}
+
+/* ตัวช่วยมองเวลาเล็งจะปล่อย (optional) */
+.printing-table tbody tr.can-drag.drag-target{
+  outline: 2px dashed rgba(11,94,207,.35);
+  outline-offset: -6px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.16);
+}

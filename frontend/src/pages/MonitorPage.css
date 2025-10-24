@@ -1,0 +1,27 @@
+/* src/pages/MonitorPage.css */
+.monitor-layout{
+  display: grid;
+  height: 100%;
+  grid-template-columns: 1fr min(34vw, 520px); /* ซ้ายวิดีโอ, ขวาการ์ด */
+  gap: clamp(16px, 2vw, 32px);
+  align-items: start;
+}
+
+/* ให้ของฝั่งซ้ายทั้งหมด (status + วิดีโอ + progress + ปุ่ม) กว้างเต็มคอลัมน์
+   เพื่อให้ช่องว่างกับคอลัมน์ขวา = gap ของกริดพอดี */
+.left-stack{
+  width: 100%;
+  max-width: none;   /* ไม่จำกัดความกว้าง */
+  margin: 0;         /* ไม่จัดกึ่งกลาง */
+}
+
+/* ระยะห่างแนวตั้งระหว่างบล็อกในฝั่งซ้าย */
+.left-stack > * + *{ margin-top: 12px; }
+
+@media (max-width: 1200px){
+  .monitor-layout{
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .left-col, .right-col{ overflow: visible; }
+}

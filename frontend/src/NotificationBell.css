@@ -1,0 +1,120 @@
+/* ขนาดควบคุมผ่าน CSS variables:
+   --nb-size (ปุ่ม), --nb-icon (ไอคอน), --nb-dot (จุดแดง) */
+.notif-wrap { position: relative; display:inline-flex; }
+
+.notif-btn{
+  position: relative;
+  width: var(--nb-size, 42px);
+  height: var(--nb-size, 42px);
+  border: none; border-radius: 999px;
+  background: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: filter .15s ease, transform .06s ease, background-color .2s ease;
+}
+.notif-btn:hover{ filter: brightness(1.05); background: rgba(255,255,255,.15); }
+.notif-btn:active{ transform: translateY(1px); }
+
+.notif-icon{
+  width: var(--nb-icon, 28px);
+  height: var(--nb-icon, 28px);
+  object-fit: contain;
+}
+
+.notif-dot{
+  position: absolute;
+  top: calc(var(--nb-size, 42px) * 0.18);
+  right: calc(var(--nb-size, 42px) * 0.18);
+  width: var(--nb-dot, 8px);
+  height: var(--nb-dot, 8px);
+  border-radius: 999px;
+  background: #ff2d55;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.25);
+}
+
+/* ---------- Panel ---------- */
+.notif-panel{
+  position: absolute;
+  right: 0; top: calc(100% + 8px);
+  width: min(380px, 88vw);
+  background: #fff;
+  color: #111827;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  padding: 10px;
+  z-index: 1000;
+}
+
+.notif-head{
+  display:flex; align-items:center; justify-content: space-between;
+  font-weight: 800; font-size: 14px; padding: 6px 6px 8px;
+}
+.notif-mark{
+  font-size: 12px; font-weight: 700; color: #2563eb;
+  background: transparent; border:none; cursor:pointer; padding:4px 6px; border-radius:8px;
+}
+.notif-mark:hover{ background:#eff6ff; }
+
+.notif-list{
+  display:flex; flex-direction: column; gap: 6px;
+  max-height: 60vh; overflow:auto; padding: 4px;
+}
+.notif-empty{ color:#6b7280; padding: 12px 8px; font-weight: 600; }
+
+/* ---------- Items (เฉพาะข้อความ ไม่มีรูป) ---------- */
+.notif-item{
+  display:flex; align-items:center; gap:6px;
+  background: transparent; border-radius:12px; padding:2px;
+}
+
+/* ปุ่มคลิกหลัก */
+.notif-main{
+  display:flex; align-items:center; gap:10px;
+  flex:1;
+  background: transparent; border:0; text-align:left;
+  padding:10px 8px; border-radius:12px; cursor:pointer;
+  transition: background-color .15s ease, transform .06s ease;
+}
+.notif-main:hover{ background:#f3f4f6; }
+.notif-item.unread .notif-main{ background:#f8fafc; }
+.notif-main:active{ transform: translateY(1px); }
+
+/* แบบ only-text (ไม่มี thumb) */
+.notif-main.only-text{ padding-left:12px; }
+
+/* เนื้อหา */
+.notif-body{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.notif-body .line1{ display:flex; align-items:center; gap:8px; min-width:0; }
+.name{ font-weight:700; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.time{ margin-left:auto; font-size: 11px; color:#6b7280; font-weight:700; }
+.line2{ font-size: 13px; color:#111827; font-weight:700; }
+.line3{ font-size:12px; color:#6b7280; }
+.line3 .printer strong{ color:#374151; }
+
+/* ป้ายสถานะ */
+.badge{
+  font-size: 11px; font-weight: 900; padding: 2px 6px; border-radius: 999px;
+  background:#e5e7eb; color:#111827; flex:0 0 auto;
+}
+.badge.done{ background:#e7f9ed; color:#0e9f6e; }
+.badge.error{ background:#fde8e8; color:#d61f1f; }
+
+/* ปุ่มลบทีละรายการ */
+.notif-remove{
+  background: transparent; border:0;
+  width:28px; height:28px; border-radius:999px;
+  color:#9ca3af; font-size:18px; line-height:1;
+  cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
+}
+.notif-remove:hover{ background:#f3f4f6; color:#111; }
+/* ทำให้ปุ่ม X ไม่ถูกพื้นที่ปุ่มหลักทับ */
+.notif-remove { flex: 0 0 auto; z-index: 1; }
+
+
+/* ---------- Navbar container ---------- */
+.navbar-right { display:flex; align-items:center; gap: 10px; }
+
+/* ลื่นตาเวลาสกรอลล์ */
+.notif-list::-webkit-scrollbar{ width:10px; }
+.notif-list::-webkit-scrollbar-thumb{ background:#e5e7eb; border-radius:8px; }
+.notif-list:hover::-webkit-scrollbar-thumb{ background:#d1d5db; }

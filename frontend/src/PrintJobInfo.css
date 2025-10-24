@@ -1,0 +1,99 @@
+/* src/PrintJobInfo.css */
+
+.printjob-wrap {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* เส้นแบ่งแนวตั้ง */
+.pj-divider {
+  width: 1px;
+  height: 64px;
+  background: #D8D8D8;
+}
+
+.printjob {
+  min-width: 260px;
+}
+
+/* ภาพ + ข้อมูล เรียงแนวนอน */
+.pj-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.pj-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+  background: #f5f5f5;
+}
+
+.pj-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+/* เลขคิวให้เด่น (เช่น 001) */
+.pj-queue {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+}
+
+/* ชื่อไฟล์ขึ้นบรรทัดถัดไป ตัวหนาเล็กน้อย */
+.pj-name {
+  margin-top: 2px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #111;
+  max-width: 420px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* สถานะ loading (skeleton) */
+.pj-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.pj-thumb-skeleton {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #eee, #f5f5f5, #eee);
+  background-size: 200% 100%;
+  animation: pjShimmer 1.2s infinite;
+}
+.pj-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pj-line {
+  height: 14px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eee, #f5f5f5, #eee);
+  background-size: 200% 100%;
+  animation: pjShimmer 1.2s infinite;
+}
+.pj-line.w50 { width: 140px; }
+.pj-line.w80 { width: 220px; }
+
+@keyframes pjShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* error */
+.pj-error {
+  color: #b00020;
+  font-weight: 600;
+}

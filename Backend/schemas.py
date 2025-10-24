@@ -31,7 +31,10 @@ class RefreshIn(BaseModel):
     # (เผื่ออนาคตมี refresh; ตอนนี้ไม่ได้ใช้)
     refresh_token: str
 
-
+class RefreshOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    
 class LoginOut(BaseModel):
     # ให้ตรงกับ main.py (token เดียว)
     token: str

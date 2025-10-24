@@ -1,0 +1,162 @@
+/* =============== App layout =============== */
+:root{
+  --primary:#0067B8;
+  --primary-dark:#00325C;
+  --text:#1b2430;
+  --card:#ffffff;
+  --shadow:0 14px 32px rgba(10,24,64,.18);
+  --stroke:#e6ebf2;
+}
+
+html, body, #root{ height:100%; }
+body{ margin:0; color:var(--text); }
+
+.App{
+  display:flex;
+  flex-direction:column;
+  min-height:100vh;
+}
+
+/* main area = side nav + page content */
+.main-content{
+  display:flex;
+  flex:1;
+  min-height:0;             /* ให้ลูกเลื่อนเอง */
+  overflow:hidden;          /* กันสกรอลล์ซ้อน */
+  padding-left:0;
+}
+
+/* =============== Left menu =============== */
+.left-box{
+  width:265px;
+  background:var(--primary);
+  border-radius:16px;
+  display:flex;
+  flex-direction:column;
+  box-shadow:6px 0 16px rgba(0,0,0,.1);
+  margin:5px;
+  /* อยากให้ติดใต้แถบหัวเว็บเวลาเลื่อนก็ปลดคอมเมนต์สองบรรทัดนี้
+  position: sticky;
+  top: 72px;
+  */
+}
+
+.menu-item{
+  color:#fff;
+  padding:12px 30px;
+  margin-left:10px; margin-top:15px;
+  font-size:18px; height:50px;
+  display:flex; align-items:center; gap:15px;
+  cursor:pointer;
+  border-left:6px solid var(--primary);
+  border-top:3px solid var(--primary);
+  border-bottom:3px solid var(--primary);
+  border-right:none;
+  border-radius:16px 0 0 16px;
+  transition:background .15s ease, color .15s ease;
+}
+.menu-item:hover{ background:var(--primary-dark); color:#fff; }
+.menu-item.selected{ background:#fff; color:var(--primary); }
+.menu-item.selected:hover{ background:#fff; color:var(--primary); }
+
+.menu-icon{
+  width:22px; height:22px; flex:0 0 22px;
+  object-fit:contain; display:block;
+}
+
+/* =============== Page content =============== */
+.printer-status-container{
+  display:flex; flex-direction:column; padding:20px; flex-grow:1;
+}
+
+/* ให้เลื่อนเฉพาะโซนเนื้อหา */
+.content-area{
+  flex:1;
+  min-width:0;
+  padding:16px 20px;
+  overflow:auto;
+  overscroll-behavior:contain;
+}
+
+/* =============== Toast (turn notice) =============== */
+.toast-turn{
+  position: fixed;
+  right: 20px;
+  top: 76px; /* ใต้ Navbar */
+  background: var(--card);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--shadow);
+  border-radius: 14px;
+  padding: 12px 14px;
+  min-width: 280px;
+  max-width: min(360px, 92vw);
+  z-index: 99999;
+  cursor: default;
+  animation: toast-slide-in .18s ease-out;
+}
+
+/* รองรับทั้งโครง <strong> / <div> จาก App.js และคลาสชื่อเฉพาะ */
+.toast-turn strong,
+.toast-title{
+  display:block;
+  font-weight:800;
+  color:#0b5ed7;
+  margin-bottom:2px;
+}
+.toast-turn > div,
+.toast-msg{
+  color: var(--text);
+  font-weight:600;
+  margin-bottom:8px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* ปุ่มเสริมใน toast (ถ้าใช้) */
+.toast-action{
+  appearance:none;
+  border:none;
+  background:#0b5ed7;
+  color:#fff;
+  padding:6px 10px;
+  border-radius:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.toast-action:hover{ filter:brightness(1.05); }
+
+@keyframes toast-slide-in{
+  from{ transform: translateY(-8px); opacity:0; }
+  to  { transform: translateY(0);    opacity:1; }
+}
+
+/* =============== Responsive =============== */
+@media (max-width: 820px){
+  .left-box{ width:230px; }
+}
+
+@media (max-width: 640px){
+  .main-content{ flex-direction:column; }
+  .left-box{
+    width:auto; margin:8px 8px 0;
+    flex-direction:row; overflow:auto; gap:8px; padding:8px;
+  }
+  .menu-item{
+    margin:0; height:auto; border-radius:10px; border:0;
+    padding:10px 14px; font-size:16px;
+    background: transparent;
+  }
+  .menu-item.selected{ background:#fff; }
+  .content-area{ padding:12px; }
+  .toast-turn{
+    right: 12px;
+    left: 12px;       /* ยืดเต็มสำหรับจอเล็ก */
+    top: 70px;
+  }
+}
+
+/* ลดการเคลื่อนไหวสำหรับผู้ใช้ที่ตั้งค่าไว้ */
+@media (prefers-reduced-motion: reduce){
+  .toast-turn{ animation:none; }
+}

@@ -1,0 +1,22 @@
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+:root{
+  --font-sans: 'Inter', 'Noto Sans Thai',
+               system-ui, -apple-system, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, 'Apple Color Emoji',
+               'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+}
+
+html, body, #root{
+  font-family: var(--font-sans);
+  /* ตัวเลขชัด/เท่ากัน (ทำงานกับ Inter) */
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+button, input, select, textarea{
+  font: inherit;   /* ให้คอมโพเนนต์ฟอร์มใช้ฟอนต์เดียวกัน */
+}

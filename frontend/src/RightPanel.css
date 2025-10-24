@@ -1,0 +1,344 @@
+/* ========== LAYOUT ========== */
+.right-panel{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  width: 100%;
+}
+
+/* แถวบน: Nozzle + Bed */
+.temp-row{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+/* แถวล่างสุด: Remaining Time + Material */
+.time-material-row{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+/* Speed ให้กินเต็มแถวกลาง */
+.speed-card{ grid-column: 1 / -1; }
+
+/* ========== CARD BASE (เวอร์ชันที่โอเคเดิม) ========== */
+.card{
+  background:#fff;
+  border-radius: 12px;
+  padding: clamp(16px, 2.2vw, 28px);
+  text-align:center;
+  box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  transition: border-color .2s ease, background .2s ease, color .2s ease, transform .06s ease;
+  border: 1px solid transparent;
+  min-height: clamp(120px, 16vh, 180px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* ===== หัวข้อ (ไอคอน + ข้อความ อยู่บรรทัดเดียว) ===== */
+.card-header{
+  display:flex;
+  align-items:center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.card-header.left{ justify-content:flex-start; }   /* ชิดซ้ายสำหรับ Nozzle/Bed */
+.card-header.center{ justify-content:center; }     /* กึ่งกลางสำหรับ Speed/Time/Material */
+
+.card-header .icon{
+  width: clamp(16px, 1.8vw, 22px);
+  height: clamp(16px, 1.8vw, 22px);
+  display:block;
+}
+
+.card-header .label{
+  font-size: clamp(14px, 1.3vw, 18px);
+  font-weight: 600;
+  color: #444;
+  margin: 0;
+}
+
+/* ค่าหลัก (เช่น 220°C, 100%) */
+.card .value{
+  font-size: clamp(28px, 3.2vw, 46px);
+  font-weight: 800;
+  line-height: 1.1;
+  position: relative;
+  margin-bottom: 10px;
+}
+
+/* Target/secondary text */
+.card .target {
+  font-size: 20px;
+  color: #666;
+  font-weight: 500;
+}
+
+/* เส้นใต้เฉพาะ Nozzle/Bed */
+.nozzle-card .value,
+.bed-card .value{ display:block; }
+
+.nozzle-card .value::after,
+.bed-card   .value::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  transform: translateX(-50%);
+  bottom: -6px;
+  width: clamp(64px, 45%, 100px);
+  height: 2px;
+  background: #9a9a9a;
+  border-radius: 1px;
+}
+
+/* วงกลมวัสดุ */
+.material-circle{
+  --size: clamp(64px, 6vw, 96px);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  background: #0054A6;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: clamp(14px, 1.3vw, 18px);
+  margin: 8px auto 0;
+  padding: 0;
+}
+
+/* ========== Speed: arrows left/right ========== */
+.speed-card{
+  position: relative;
+  /* เพิ่ม padding ซ้าย/ขวา กันปุ่มลูกศรทับข้อความกลาง */
+  padding-left: 72px;
+  padding-right: 72px;
+}
+
+/* ปุ่มลูกศร */
+.speed-arrow{
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  color: #0b5ed7;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, color .15s ease, transform .05s ease;
+}
+.speed-arrow.left  { left: 0; border-radius: 12px 0 0 12px; }
+.speed-arrow.right { right: 0; border-radius: 0 12px 12px 0; }
+
+.speed-arrow:hover:not(:disabled){ background: rgba(13,110,253,.08); }
+.speed-arrow:active:not(:disabled){ background: rgba(13,110,253,.16); transform: scale(.98); }
+.speed-arrow:disabled{ color:#9aa3af; cursor:not-allowed; }
+
+.speed-card.is-busy .value { opacity: .6; }
+
+/* ========== HOVER / SELECT ========== */
+.hoverable:hover,
+.is-selected{
+  border-color:#0054A6;
+  background:#f0f6ff;
+}
+.clickable{ cursor:pointer; }
+.clickable:hover{ transform: translateY(-1px); }
+
+.hoverable:hover .card-header .label,
+.hoverable:hover .value,
+.hoverable:hover .target,
+.is-selected .card-header .label,
+.is-selected .value,
+.is-selected .target{
+  color: #0054A6;
+}
+
+.nozzle-card.hoverable:hover .value::after,
+.bed-card.hoverable:hover    .value::after,
+.nozzle-card.is-selected     .value::after,
+.bed-card.is-selected        .value::after{
+  background:#0054A6;
+}
+
+.nozzle-card.hoverable:hover  .card-header .icon,
+.bed-card.hoverable:hover     .card-header .icon,
+.speed-card.hoverable:hover   .card-header .icon{
+  filter: brightness(0) saturate(100%) invert(22%) sepia(99%)
+          saturate(3108%) hue-rotate(201deg) brightness(95%) contrast(101%);
+}
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 1200px){
+  .temp-row,
+  .time-material-row{ grid-template-columns: 1fr; }
+  .speed-card{ grid-column: 1; }
+}
+@media (max-width: 640px){
+  .speed-card{ padding-left: 60px; padding-right: 60px; }
+  .speed-arrow{ width: 48px; }
+}
+
+/* ========== Temperature Modal – ดีไซน์ตามแบบ ========== */
+.temp-modal-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.55);
+  display:grid;
+  place-items:center;
+  z-index:3000;
+  padding:20px;
+}
+.temp-modal{
+  background:#fff;
+  width:min(520px, 94vw);
+  border-radius:18px;
+  box-shadow:0 18px 60px rgba(0,0,0,.35);
+  padding:18px 18px 16px;
+  position:relative;
+  text-align:center;
+}
+.temp-modal h2{
+  font-size:20px;
+  font-weight:800;
+  color:#111;
+  margin:2px 0 14px;
+  position:relative;
+  padding-bottom:10px;
+}
+.temp-modal h2::after{
+  content:"";
+  position:absolute;
+  left:-18px; right:-18px;
+  bottom:0;
+  height:1px;
+  background:#E5E7EB;
+}
+
+/* ปุ่มกากบาทมุมขวาบน */
+.temp-close{
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+.temp-close img{ width:24px; height:24px; display:block; }
+.temp-close:hover{ opacity:.9; transform:scale(1.02); }
+.temp-close:active{ transform:scale(0.98); }
+
+/* ช่องตัวเลข */
+.temp-input{
+  height:68px;
+  width:100%;
+  box-sizing: border-box;
+  border:1px solid #E5E7EB;
+  background:#F3F5F8;
+  border-radius:10px;
+  text-align:center;
+  font-size:48px;
+  font-weight:800;
+  color:#111;
+  margin:0 2px 16px;
+  box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
+  outline:none;
+}
+.temp-input::-webkit-outer-spin-button,
+.temp-input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+.temp-input[type=number]{ -moz-appearance:textfield; }
+
+/* ปุ่ม -/+ */
+.temp-controls{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin-bottom:16px;
+}
+.temp-controls button{
+  height:48px;
+  border-radius:10px;
+  border:1.5px solid #BFD8FF;
+  background:#EAF3FF;
+  color:#0B5ECF;
+  font-weight:700; font-size:16px;
+  cursor:pointer;
+}
+.temp-controls button:hover{ filter:brightness(1.02); }
+.temp-controls button:active{ transform:translateY(1px); }
+.temp-controls button:focus-visible{
+  outline:3px solid rgba(11,94,207,.25);
+  outline-offset:2px;
+}
+
+/* DONE button */
+.temp-modal .done-btn,
+.temp-modal .temp-done{
+  width:100%;
+  height:52px;
+  border:0;
+  border-radius:10px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:16px;
+  font-weight:800;
+  color:#fff;
+  cursor:pointer;
+  background:#1E8BFF;
+  box-shadow:none;
+  transition:background-color .12s ease;
+  appearance:none;
+}
+.temp-modal .done-btn:hover,
+.temp-modal .temp-done:hover{ background:#0054A6; }
+.temp-modal .done-btn:active,
+.temp-modal .temp-done:active{ background:#0A2F8C; }
+.temp-modal .done-btn:focus-visible,
+.temp-modal .temp-done:focus-visible{
+  outline:2px solid rgba(11,94,207,.35);
+  outline-offset:2px;
+}
+
+/* ปุ่ม -/+ สถานะเพิ่มเติม */
+.temp-modal .temp-controls .temp-btn{
+  height:48px;
+  border-radius:12px;
+  border:1.5px solid #BFD8FF;
+  background:#ECF4FF;
+  color:#0B5ECF;
+  font-weight:700;
+  font-size:16px;
+  cursor:pointer;
+  transition:background-color .12s ease, color .12s ease, border-color .12s ease;
+  box-shadow:none;
+}
+.temp-modal .temp-controls .temp-btn:hover{
+  background:#1E8BFF;
+  border-color:#1E8BFF;
+  color:#fff;
+}
+.temp-modal .temp-controls .temp-btn:active,
+.temp-modal .temp-controls .temp-btn.is-selected{
+  background:#0A1E73;
+  border-color:#0A1E73;
+  color:#fff;
+}
+.temp-modal .temp-controls .temp-btn:focus-visible{
+  outline:2px solid rgba(11,94,207,.35);
+  outline-offset:2px;
+}

@@ -1,0 +1,40 @@
+{
+  "name": "ADI 3D Printer Console",
+  "short_name": "ADI 3DP",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "theme_color": "#0a3d91",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "16x16 24x24 32x32 48x48 64x64",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "Analog_Devices_Logo.svg.png?v=3",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "Analog_Devices_Logo.svg.png?v=3",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "Analog_Devices_Logo.svg.png?v=3",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "Analog_Devices_Logo.svg.png?v=3",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,248 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #0067B8; /* สีฟ้า */
+  padding: 10px 20px;
+  color: white;
+}
+
+.navbar-left {
+  display: flex;
+  align-items: center;
+}
+
+.navbar-logo {
+  width: 150px;
+  height: auto;
+  margin-right: 10px;
+}
+
+.navbar-title {
+  font-size: 18px;
+  font-weight: bold;
+  margin-left: 30px;
+}
+
+.navbar-right {
+  display: flex;
+  align-items: center;
+}
+
+/* ปุ่ม Upload */
+.upload-btn {
+  display: inline-flex;
+  align-items: center;       /* จัดแนวกลางแนวตั้ง */
+  justify-content: center;   /* จัดกลางแนวนอน */
+  gap: 6px;
+  background-color: white;
+  color: #0054A6;
+  border: none;
+  padding: 4px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  height: 32px;
+  line-height: 1;
+  transition: background-color 0.2s ease;
+}
+
+.upload-btn:hover {
+  background-color: #0054A6;
+  color: white;
+}
+
+.upload-btn .upload-icon {
+  width: 18px;
+  height: 18px;
+  display: block;       /* ป้องกัน baseline ทำให้เอียง */
+  object-fit: contain;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* ❌ ลบ .upload-icon global ที่ทับค่าออก */
+
+/* ปุ่ม Notification */
+.notification-btn {
+  background: transparent;
+  border: none;
+  margin-left: 10px;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notification-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.notification-icon {
+  width: 35px;
+  height: 30px;
+}
+
+.notification-badge-dot {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  width: 8px;
+  height: 8px;
+  background: #C81A28;
+  border-radius: 50%;
+}
+
+/* ปุ่ม User */
+.user-btn {
+  background: transparent;
+  border: none;
+  padding: 8px;
+  border-radius: 6px;
+  transition: background-color 0.3s ease;
+}
+
+.user-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+
+.user-icon {
+  width: 35px;
+  height: 35px;
+  object-fit: contain;
+}
+
+/* anchor สำหรับเมนูผู้ใช้ */
+.user-wrap { position: relative; display: inline-block; }
+
+/* ปุ่มไอคอนผู้ใช้ (ขนาดเดิมของคุณใช้ต่อได้) */
+.user-btn { background: transparent; border: none; cursor: pointer; padding: 0 6px; }
+.user-icon { width: 28px; height: 28px; display: block; }
+
+/* กล่องเมนูผู้ใช้ */
+.user-menu{
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  min-width: 220px;
+  background: #fff;
+  color: #111;
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.18);
+  padding: 10px;
+  z-index: 10;
+}
+
+/* ส่วนหัวในเมนู */
+.user-row{ display:flex; gap:10px; align-items:center; padding:6px 4px; }
+.user-avatar img{ width:36px; height:36px; border-radius:50%; display:block; }
+.user-meta{ display:flex; flex-direction:column; line-height:1.2; }
+.user-name{ font-weight:800; }
+.user-id{ font-size:12px; color:#556; }
+
+/* เส้นคั่น */
+.user-sep{ height:1px; background:#eceff4; margin:8px 0; }
+
+/* รายการในเมนู */
+.user-item{
+  width:100%;
+  text-align:left;
+  background:#fff;
+  border:none;
+  padding:10px 8px;
+  border-radius:10px;
+  cursor:pointer;
+  font-weight:700;
+}
+.user-item:hover{ background:#f4f6f8; }
+.user-item.danger{ color:#b00020; }
+.user-item.danger:hover{ background:#fde6ea; }
+
+/* ปุ่ม/รูปผู้ใช้ */
+.user-wrap{ position: relative; display: inline-block; }
+.user-btn{ background: transparent; border: none; cursor: pointer; padding: 0 6px; }
+.user-icon{ width: 28px; height: 28px; border-radius: 50%; object-fit: cover; display: block; }
+
+/* กล่องเมนู */
+.user-menu{
+  position: absolute; right: 0; top: calc(100% + 10px); min-width: 220px;
+  background: #fff; color:#111; border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.18); padding: 10px; z-index: 10;
+}
+
+.user-row{ display:flex; gap:10px; align-items:center; padding:6px 4px; }
+.user-avatar img{ width:36px; height:36px; border-radius:50%; object-fit:cover; display:block; }
+.user-meta{ display:flex; flex-direction:column; line-height:1.2; }
+.user-name{ font-weight:800; }
+.user-id{ font-size:12px; color:#556; }
+
+.user-sep{ height:1px; background:#eceff4; margin:8px 0; }
+.user-item{
+  width:100%; text-align:left; background:#fff; border:none;
+  padding:10px 8px; border-radius:10px; cursor:pointer; font-weight:700;
+}
+.user-item:hover{ background:#f4f6f8; }
+.user-item.danger{ color:#b00020; }
+.user-item.danger:hover{ background:#fde6ea; }
+
+.user-email{
+  font-size:12px;
+  color:#6b7280;   /* เทาอ่านง่าย */
+  word-break: break-all;
+}
+
+/* ===== สมมาตรระหว่าง Upload ▸ กระดิ่ง ▸ โปรไฟล์ ===== */
+.navbar-right{
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;                 /* ระยะคงที่เท่ากันทุกชิ้น */
+}
+.navbar-right > *{ margin: 0 !important; }
+
+/* ไซซ์มาตรฐานของปุ่มไอคอน (กระดิ่ง/โปรไฟล์) — ลดลงเหลือ 40px */
+:root{ --nav-icon-box: 40px; --nav-icon-size: 24px; }
+
+/* ✅ ย้ำให้ปุ่ม Upload กลับไปขนาดเดิม */
+.upload-btn{
+  height: 32px !important;         /* ขนาดเดิม */
+  padding: 4px 14px !important;    /* เดิม */
+  line-height: 1;
+}
+.upload-icon{ width: 18px; height: 18px; }
+
+/* กระดิ่ง (NotificationBell) */
+.notif-wrap{ margin: 0; }
+.notif-btn{
+  width: var(--nav-icon-box) !important;
+  height: var(--nav-icon-box) !important;
+}
+.notif-icon{
+  width: var(--nav-icon-size) !important;
+  height: var(--nav-icon-size) !important;
+}
+
+/* โปรไฟล์ */
+.user-wrap{ margin: 0; }
+.user-btn{
+  width: var(--nav-icon-box);
+  height: var(--nav-icon-box);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.user-icon{
+  width: var(--nav-icon-size);
+  height: var(--nav-icon-size);
+  border-radius: 50%;
+}

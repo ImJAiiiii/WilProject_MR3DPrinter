@@ -1,0 +1,239 @@
+/* src/PrintControls.css */
+
+/* ===== Layout (คงดีไซน์เดิม) ===== */
+.under-progress-row{
+  display:flex;
+  align-items:center;
+  gap:32px;
+  margin-top:12px;
+}
+
+.print-controls{
+  display:flex;
+  align-items:center;
+  gap:24px;
+  margin-top:16px;
+}
+
+/* เส้นแบ่งแนวตั้งระหว่างปุ่ม */
+.controls-divider{
+  width:1px;
+  height:64px;
+  background:#D8D8D8;
+}
+
+/* ===== Base ปุ่มควบคุม Pause/Cancel (คงดีไซน์เดิม) ===== */
+.control-btn{
+  width:104px;
+  height:104px;
+  border:none;
+  border-radius:20px;
+  background:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,.08);
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  transition:transform .06s ease, background-color .2s ease, box-shadow .2s ease, opacity .2s ease;
+  position:relative;
+}
+
+.control-btn:disabled{
+  opacity:.6;
+  cursor:not-allowed;
+  pointer-events:none;
+}
+
+/* ไอคอน 3 สถานะ (default / hover / active) */
+.control-btn img{ width:36px; height:36px; display:none; }
+.control-btn img.icon-default{ display:block; }
+.control-btn:not(:disabled):not(.is-busy):hover img.icon-default{ display:none; }
+.control-btn:not(:disabled):not(.is-busy):hover img.icon-hover{ display:block; }
+.control-btn:not(:disabled):not(.is-busy):active img.icon-hover{ display:none; }
+.control-btn:not(:disabled):not(.is-busy):active img.icon-active{ display:block; }
+
+.control-btn .label{
+  margin-top:8px;
+  font-size:14px;
+  font-weight:500;
+  color:#1A1A1A;
+  transition:color .15s ease;
+}
+
+/* ----- Pause (เดิม) ----- */
+.pause-btn:not(:disabled):not(.is-busy):hover .label{ color:#0057B7; }
+.pause-btn:not(:disabled):not(.is-busy):active{
+  background:#0057B7;
+  box-shadow:0 4px 14px rgba(0,87,183,.35);
+}
+.pause-btn:not(:disabled):not(.is-busy):active .label{ color:#fff; }
+
+/* ----- Cancel (เดิม) ----- */
+.cancel-btn:not(:disabled):not(.is-busy):hover .label{ color:#C51111; }
+.cancel-btn:not(:disabled):not(.is-busy):active{
+  background:#B00000;
+  box-shadow:0 4px 14px rgba(176,0,0,.35);
+}
+.cancel-btn:not(:disabled):not(.is-busy):active .label{ color:#fff; }
+
+/* ===== สถานะกำลังทำงาน (.is-busy) → ปิด hover และโชว์สปินเนอร์ ===== */
+.control-btn.is-busy{
+  opacity:.85;
+  cursor:progress;
+}
+.control-btn.is-busy::after{
+  content:"";
+  position:absolute;
+  width:20px; height:20px;
+  border:2.5px solid rgba(0,0,0,.25);
+  border-top-color:#000;
+  border-radius:50%;
+  animation:pc-spin .8s linear infinite;
+}
+@keyframes pc-spin{
+  to { transform:rotate(360deg); }
+}
+
+/* ===== ป้ายข้อความสั้นๆ ใต้ปุ่ม (เช่น Paused/Resumed/Failed) ===== */
+.pc-hint{
+  margin-top:6px;
+  font-size:12px;
+  font-weight:600;
+  color:#333;
+}
+
+/* ===== การ์ดข้อมูลไฟล์ (คงดีไซน์เดิม) ===== */
+.print-job-info{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding-left:12px;
+}
+
+.print-job-preview{
+  width:90px;
+  height:90px;
+  object-fit:contain;
+  border-radius:8px;
+  background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.12);
+}
+
+.print-job-details{
+  display:flex;
+  flex-direction:column;
+  line-height:1.2;
+}
+.print-job-queue{ font-weight:800; font-size:22px; }
+.print-job-name{  font-weight:700; font-size:20px; }
+
+/* ===== Confirm Cancel popup (prefix cc-) ===== */
+.cc-overlay{
+  position:fixed; inset:0;
+  background:rgba(0,0,0,.65);
+  display:grid; place-items:center;
+  z-index:3000; padding:20px;
+}
+
+.cc-modal{
+  width:min(520px,92vw);
+  background:#fff;
+  border-radius:18px;
+  padding:20px;
+  box-shadow:0 10px 30px rgba(0,0,0,.25);
+}
+
+.cc-title{
+  text-align:center;
+  font-size:22px;
+  font-weight:700;
+  color:#333;
+  margin:0 0 10px;
+}
+
+.cc-part{
+  text-align:center;
+  margin-bottom:18px;
+  font-weight:800;
+}
+.cc-code{ font-size:22px; color:#111; }
+.cc-name{ font-size:22px; color:#555; }
+
+.cc-actions{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+
+/* ปุ่มในป๊อปอัพ */
+.cc-btn{
+  height:48px;
+  border-radius:999px;
+  font-weight:700;
+  font-size:16px;
+  cursor:pointer;
+  background:#fff;
+  transition:background-color .12s ease, color .12s ease, border-color .12s ease;
+}
+.cc-btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+/* Yes, Cancel */
+.cc-btn.cc-danger{
+  background:#fff;
+  color:#C31212;
+  border:2.5px solid #C31212;
+}
+.cc-btn.cc-danger:not(:disabled):hover{
+  background:#C31212;
+  color:#fff;
+  border-color:#C31212;
+}
+.cc-btn.cc-danger:not(:disabled):active,
+.cc-btn.cc-danger.is-selected{
+  background:#7A0000;
+  color:#fff;
+  border-color:#7A0000;
+}
+
+/* Go Back */
+.cc-btn.cc-ghost{
+  background:#fff;
+  color:#222;
+  border:2.5px solid #222;
+}
+.cc-btn.cc-ghost:not(:disabled):hover{
+  background:#5A5A5A;
+  color:#fff;
+  border-color:#5A5A5A;
+}
+.cc-btn.cc-ghost:not(:disabled):active,
+.cc-btn.cc-ghost.is-selected{
+  background:#2F2F2F;
+  color:#fff;
+  border-color:#2F2F2F;
+}
+
+/* โฟกัสด้วยคีย์บอร์ด */
+.cc-btn:focus-visible{
+  outline:2px solid rgba(0,0,0,.25);
+  outline-offset:2px;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 720px){
+  .under-progress-row{ gap:20px; }
+  .print-controls{ gap:16px; }
+  .controls-divider{ height:56px; }
+  .control-btn{ width:96px; height:96px; }
+  .print-job-preview{ width:76px; height:76px; }
+  .print-job-queue{ font-size:20px; }
+  .print-job-name{ font-size:18px; }
+}
+
+/* ===== ลดแอนิเมชันถ้าผู้ใช้ตั้งค่า ===== */
+@media (prefers-reduced-motion: reduce){
+  .control-btn,
+  .cc-btn{ transition:none; }
+  .control-btn.is-busy::after{ animation:none; }
+}

@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@fontsource/inter": "^5.2.6",
+    "@fontsource/noto-sans-thai": "^5.2.6",
+    "gcode-preview": "^2.18.0",
+    "three": "^0.180.0"
+  }
+}

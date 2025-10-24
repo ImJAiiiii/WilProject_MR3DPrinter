@@ -1,0 +1,65 @@
+/* src/VideoStream.css */
+
+/* กรอบใหญ่คุมทั้งวิดีโอ + แถบ progress
+   ทำให้กินเต็มคอลัมน์ซ้ายเพื่อให้ระยะกับคอลัมน์ขวาเท่ากับ gap */
+.video-block{
+  width: 100%;
+  max-width: none;   /* ไม่จำกัดความกว้าง */
+  margin: 0;         /* ไม่จัดกึ่งกลาง */
+}
+
+.video-wrapper{
+  position: relative;
+  width: 100%;
+}
+
+.video-el{
+  margin-top: 15px;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0;
+  display: block;
+}
+
+/* ปุ่มควบคุมลอยทับมุมขวาล่างของวิดีโอ */
+.video-controls{
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 10px;
+}
+
+.play-pause-button{
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.video-icon{
+  width: clamp(36px, 3.8vw, 56px);
+  height: clamp(36px, 3.8vw, 56px);
+  display: block;
+}
+
+/* progress อยู่ใต้กรอบวิดีโอ → เต็มความกว้างเท่ากัน */
+.video-progress-wrap{
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* ถ้า PrintProgress ภายในมี max-width ให้ยกเลิก */
+.video-block .print-progress{
+  max-width: none !important;
+}
+
+/* จอเล็ก: ให้ปุ่มชิดมุมมากขึ้น */
+@media (max-width: 640px){
+  .video-controls{
+    right: 8px;
+    bottom: 8px;
+  }
+}

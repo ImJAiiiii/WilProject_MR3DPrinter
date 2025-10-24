@@ -1,0 +1,92 @@
+.print-progress {
+  width: 100%;
+  max-width: 980px;         /* กว้างพอๆ กับวิดีโอ */
+  margin-top: 12px;
+  user-select: none;
+}
+
+.print-progress__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #0b4ea2;
+}
+
+.print-progress__percent { font-size: 18px; color: #0b4ea2; }
+.print-progress__eta { font-size: 14px; color: #222; }
+
+.print-progress__bar {
+  position: relative;
+  height: 12px;
+  background: #e9ecef;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.print-progress__bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: #0859b1;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
+.job-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 84px;
+}
+
+.divider-vert {
+  width: 1px;
+  height: 64px;
+  background: #c9ccd1;
+  margin-right: 16px;
+}
+
+.thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+
+.meta { display: flex; flex-direction: column; line-height: 1.1; }
+.queue { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+.name  { font-size: 22px; font-weight: 600; }
+
+/* states */
+.empty, .error {
+  color: #b3261e;  /* โทนแดงแบบอ่านง่าย */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* skeleton / placeholder */
+.placeholder .thumb { background: #eee; }
+.placeholder .line  { height: 14px; background: #eee; border-radius: 4px; margin: 6px 0; }
+.placeholder .w60 { width: 160px; }
+.placeholder .w40 { width: 120px; }
+
+/* simple shimmer */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent);
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
