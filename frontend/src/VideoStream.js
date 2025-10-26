@@ -30,7 +30,7 @@ export default function VideoStream({
   job,
   queueNumber,
   // ปรับความลื่น snapshot ได้ที่นี่
-  targetFps = 12,
+  targetFps = 15,
   minFpsHidden = 3,
   // ปรับการยืดภาพหากต้องการ: "contain" | "cover"
   objectFit = "contain",

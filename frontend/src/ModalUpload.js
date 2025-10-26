@@ -131,7 +131,7 @@ export default function ModalUpload({
     if (preparing || confirming) return;
     inputRef.current?.click();
   };
-
+  
   /* ---------- upload via presigned (→ staging/*) ---------- */
   const uploadViaPresign = useCallback(async (file) => {
     const ext = getExt(file.name);
@@ -632,16 +632,26 @@ export default function ModalUpload({
     return invalidByRegex ? 'Name must be like ModelName_V1' : '';
   })();
 
+  if (!isOpen && !previewOpen) return null;
+  
   return (
     <>
       {/* ซ่อนกล่องอัปโหลดเมื่อพรีวิวเปิด */}
       {!previewOpen && (
         <div className="modal-overlay" onClick={() => { if (!preparing && !confirming) onClose?.(); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <button className="close-btn" onClick={() => { if (!preparing && !confirming) onClose?.(); }} aria-label="Close">
+            <button
+              className="close-btn"
+              onClick={() => {
+                // ✅ Force reset แล้วปิดได้แน่นอน
+                setPreparing(false);
+                setConfirming(false);
+                onClose?.();
+              }}
+              aria-label="Close"
+            >
               <img src={process.env.PUBLIC_URL + '/icon/Close.png'} alt="" className="close-icon" />
             </button>
-
             <div className="upload-box">
               <div
                 className={`upload-area ${dragOver ? 'is-dragover' : ''}`}
