@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import mimetypes
+import re
+
 from datetime import datetime
 from typing import List, Optional
 
@@ -379,3 +381,236 @@ def list_all_s3(
         token = resp.get("NextContinuationToken")
 
     return {"ok": True, "items": items, "prefix": prefix, "count": len(items)}
+
+# ======= CATALOG LISTING + HELPERS ===========================================
+
+def _derive_model_from_key(key: str) -> Optional[str]:
+    try:
+        parts = (key or "").split("/")
+        return parts[1] if len(parts) >= 2 and parts[0] == "catalog" else None
+    except Exception:
+        return None
+
+def _basename(key: str) -> str:
+    import os as _os
+    return _os.path.basename(key or "")
+
+def _ext(name: str) -> str:
+    n = (name or "").lower()
+    i = n.rfind(".")
+    return n[i+1:] if i >= 0 else ""
+
+def _is_gcode_name(name: str) -> bool:
+    e = _ext(name)
+    return e in ("gcode", "gco", "gc")
+
+@router.get("/catalog")
+def storage_catalog(
+    model: Optional[str] = Query(None, description="เช่น Hontech, Delta"),
+    q: Optional[str] = Query(None, description="คำค้นในชื่อไฟล์"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(2000, ge=1, le=5000),
+    with_urls: int = Query(1, description="แนบ presigned url ให้รูป preview ถ้ามี"),
+    with_head: int = Query(0),
+    include_staging: int = Query(0),  # เผื่อ FE ส่งมา ไม่ได้ใช้
+    _me: User = Depends(get_confirmed_user),
+):
+    """
+    ส่งรายการไฟล์ใน S3 ภายใต้ prefix 'catalog/'. รูปร่างแต่ละชิ้นจะสอดคล้องกับที่ FE คาดหวัง:
+    { display_name, filename, object_key, model, size, content_type, ext,
+      uploaded_at, thumb, preview_url, json_key, stats?, uploader? }
+    """
+    try:
+        s3 = _s3_client()
+    except Exception as e:
+        raise HTTPException(503, f"S3 not configured: {e}")
+
+    prefix = "catalog/" if not model else f"catalog/{model.strip().rstrip('/')}/"
+    fetched = 0
+    token: Optional[str] = None
+
+    # ดึง object ทั้ง prefix มาก่อน เพื่อรู้ว่ามี preview/json คู่กันหรือไม่
+    objects: dict[str, dict] = {}
+    keys_present: set[str] = set()
+
+    while True:
+        kwargs = dict(Bucket=_S3_BUCKET, Prefix=prefix, MaxKeys=min(1000, 5000 - fetched))
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+
+        for obj in resp.get("Contents", []):
+            key = obj.get("Key") or ""
+            if not key or key.endswith("/"):
+                continue
+            keys_present.add(key)
+            objects[key] = obj
+            fetched += 1
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    
+    def _preview_candidates(gkey: str) -> list[str]:
+        base = gkey.rsplit(".", 1)[0]
+        dirp = os.path.dirname(gkey)
+        name = os.path.basename(base)
+
+        # ตัด suffix ที่มักจะมีในชื่อ G-code แต่รูปพรีวิวไม่มี
+        # เช่น ..._oriented / -oriented / oriented (มี/ไม่มีตัวคั่น)
+        name_no_oriented = re.sub(r'([_\-\s]?oriented)$', '', name, flags=re.IGNORECASE)
+
+        cands = [
+            f"{base}.preview.png",
+            f"{base}_preview.png",
+            f"{base}_oriented_preview.png",
+            f"{dirp}/{name}.preview.png",
+            f"{dirp}/{name}_preview.png",
+        ]
+
+        if name_no_oriented and name_no_oriented != name:
+            cands += [
+                f"{dirp}/{name_no_oriented}.preview.png",
+                f"{dirp}/{name_no_oriented}_preview.png",
+            ]
+
+        # unique & คงลำดับ
+        seen = set(); out = []
+        for p in cands:
+            if p not in seen:
+                seen.add(p); out.append(p)
+        return out
+
+    items: list[dict] = []
+    text_q = (q or "").strip().lower()
+
+    for key, meta in objects.items():
+        name = _basename(key)
+        if not _is_gcode_name(name):
+            continue  # แสดงเฉพาะ gcode เป็น "ไฟล์หลัก"
+
+        if text_q and text_q not in name.lower():
+            # กรองด้วยคำค้นแบบง่าย ๆ
+            continue
+
+        # หา preview/json ที่อยู่คู่กัน
+        cands = _preview_candidates(key)
+        preview_key = next((p for p in cands if p in keys_present), None)
+        json_key = f"{key.rsplit('.',1)[0]}.json"
+        if json_key not in keys_present:
+            json_key = None
+
+        # สร้าง record
+        uploaded_at = meta.get("LastModified").isoformat() if meta.get("LastModified") else None
+        size = int(meta.get("Size") or 0)
+        content_type = _mime_for(key)
+        ext_str = _ext(name)
+        model_name = _derive_model_from_key(key)
+
+        rec = {
+            "display_name": name,
+            "filename": name,
+            "object_key": key,
+            "gcode_key": key,
+            "model": model_name,
+            "size": size,
+            "content_type": content_type,
+            "ext": ext_str,
+            "uploaded_at": uploaded_at,
+            # FE รองรับ 2 แบบ: ถ้าเป็น URL เต็มให้ field 'preview_url' เป็น https, ถ้าเป็น key ให้ส่ง key
+            "preview_url": preview_key or None,
+            "thumb": preview_key or None,     # เผื่อ FE ใช้ field นี้
+            "json_key": json_key or None,
+            "uploader": None,                 # ไม่มีข้อมูลผูก user ใน S3 ตรงนี้
+            "stats": None,                    # ให้ modal/manifest เติมทีหลัง
+        }
+
+        if with_urls and preview_key:
+            try:
+                rec["preview_url"] = presign_get(preview_key)
+            except Exception:
+                # ถ้า presign ไม่ได้ก็ปล่อยเป็น key ให้ FE ไปตีเป็น /files/raw เอง
+                rec["preview_url"] = preview_key
+
+        if with_head:
+            # แนบ head เพิ่มถ้าขอมา
+            try:
+                h = head_object(key)
+                rec["size"] = int(h.get("ContentLength") or size)
+                rec["content_type"] = h.get("ContentType") or content_type
+            except Exception:
+                pass
+
+        items.append(rec)
+
+    # offset/limit ฝั่งเซิร์ฟเวอร์
+    items.sort(key=lambda r: r.get("uploaded_at") or "", reverse=True)
+    if offset:
+        items = items[offset:]
+    if limit:
+        items = items[:limit]
+
+    return {"ok": True, "items": items, "count": len(items)}
+
+# ======= RANGE READER (tail of G-code) =======================================
+
+from fastapi.responses import PlainTextResponse
+
+@router.get("/range", response_class=PlainTextResponse)
+def get_range_text(
+    object_key: str = Query(..., description="S3 object key ของไฟล์ G-code"),
+    start: int = Query(-400000, description="เริ่ม byte; ค่าลบ = นับจากท้ายไฟล์"),
+    length: int = Query(400000, description="จำนวน byte ที่อ่าน (สูงสุด ~4MB)"),
+    _me: User = Depends(get_confirmed_user),
+):
+    key = _validate_key(object_key)
+    try:
+        s3 = _s3_client()
+    except Exception as e:
+        raise HTTPException(503, f"S3 not configured: {e}")
+
+    # คำนวณช่วง byte
+    try:
+        h = s3.head_object(Bucket=_S3_BUCKET, Key=key)
+        total = int(h.get("ContentLength") or 0)
+    except Exception as e:
+        raise HTTPException(404, f"Object not found: {e}")
+
+    if total <= 0:
+        return PlainTextResponse("", media_type="text/plain")
+
+    if start < 0:
+        begin = max(total + start, 0)
+    else:
+        begin = max(start, 0)
+
+    end = min(begin + max(length, 1) - 1, total - 1)
+    byte_range = f"bytes={begin}-{end}"
+
+    try:
+        obj = s3.get_object(Bucket=_S3_BUCKET, Key=key, Range=byte_range)
+        data = obj["Body"].read()
+        # พยายาม decode เป็น utf-8 ถ้าไม่ได้ก็ใช้ latin-1
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:
+            text = data.decode("latin-1", errors="replace")
+        return PlainTextResponse(text, media_type="text/plain")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read range: {e}")
+
+# ======= DELETE BY KEY (สำหรับ FE fallback) ==================================
+
+from fastapi import Body
+
+@router.delete("/by-key")
+def delete_by_key(
+    payload: dict = Body(..., description='{"object_key": "...", "delete_object_from_s3": true}'),
+    _manager: User = Depends(get_manager_user),
+):
+    key = _validate_key(payload.get("object_key", ""))
+    try:
+        delete_object(key)
+    except Exception:
+        # ถ้าลบไม่ได้ก็ไม่ต้อง fail hard
+        pass
+    return {"ok": True, "deleted": key}

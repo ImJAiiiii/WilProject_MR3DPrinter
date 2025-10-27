@@ -1,7 +1,7 @@
 // src/StorageReprintModal.js
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import "./StorageReprintModal.css";
-import { useApi, objectKeyToUrl } from "./api";
+import { useApi } from "./api";
 import { useAuth } from "./auth/AuthContext";
 
 /* ------------ helpers (pure) ------------ */
@@ -31,9 +31,7 @@ const fmtDateTime = (v) => {
     if (!v && v !== 0) return "-";
     const d = typeof v === "number" ? new Date(v) : new Date(v);
     return isNaN(d) ? "-" : d.toLocaleString();
-  } catch {
-    return "-";
-  }
+  } catch { return "-"; }
 };
 const fmtBytes = (n) => {
   const b = Number(n);
@@ -50,7 +48,7 @@ const extFromKey = (k) => {
   return m ? m[1] : "";
 };
 
-/* ---- helpers for manifest mapping ---- */
+/* ---- manifest mapping helpers ---- */
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const fromPercent = (s) => {
   if (s == null) return null;
@@ -68,28 +66,14 @@ const deriveModelFromKey = (key) => {
     if (!key) return null;
     const parts = String(key).split("/");
     return parts[0] === "catalog" && parts[1] ? parts[1] : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 };
 
-/* ==== material short name + filament grams extractors ==== */
+/* ==== material + grams ==== */
 function simplifyMaterial(s) {
   if (!s) return null;
   const u = String(s).toUpperCase();
-  const picks = [
-    "PLA",
-    "PETG",
-    "ABS",
-    "TPU",
-    "ASA",
-    "PA",
-    "NYLON",
-    "PC",
-    "PCTG",
-    "HIPS",
-    "PP",
-  ];
+  const picks = ["PLA","PETG","ABS","TPU","ASA","PA","NYLON","PC","PCTG","HIPS","PP"];
   for (const k of picks) if (u.includes(k)) return k;
   const w = (u.match(/[A-Z]{2,}/g) || [])[0];
   return w || s;
@@ -110,24 +94,15 @@ const parseNumInText = (s) => {
 function pickFilamentGrams(man) {
   const s = man?.summary || {};
   const direct =
-    num(s.filament_g) ??
-    num(s.filament_g_total) ??
-    num(s.filament_total_g) ??
-    num(man.filament_g) ??
-    num(man.filament_g_total) ??
-    num(man.filament_total_g) ??
-    num(s.filament?.g) ??
-    num(s.filament?.grams) ??
-    num(s.filament?.total_g);
+    num(s.filament_g) ?? num(s.filament_g_total) ?? num(s.filament_total_g) ??
+    num(man.filament_g) ?? num(man.filament_g_total) ?? num(man.filament_total_g) ??
+    num(s.filament?.g) ?? num(s.filament?.grams) ?? num(s.filament?.total_g);
   if (direct != null) return +direct.toFixed(2);
 
-  const arr = Array.isArray(man.filament)
-    ? man.filament
-    : Array.isArray(man.filaments)
-    ? man.filaments
-    : Array.isArray(man.extruders)
-    ? man.extruders
-    : null;
+  const arr = Array.isArray(man.filament) ? man.filament
+            : Array.isArray(man.filaments) ? man.filaments
+            : Array.isArray(man.extruders) ? man.extruders
+            : null;
   if (arr && arr.length) {
     const sum = arr.reduce((acc, it) => {
       const g = num(it?.g) ?? num(it?.grams) ?? parseNumInText(it?.text);
@@ -140,18 +115,14 @@ function pickFilamentGrams(man) {
   const parsed = parseNumInText(text);
   if (parsed != null && parsed > 0) return +parsed.toFixed(2);
 
-  const mm =
-    num(s.filament_mm) ??
-    num(s.filament_total_mm) ??
-    num(man.filament_mm) ??
-    num(man.filament_total_mm);
+  const mm = num(s.filament_mm) ?? num(s.filament_total_mm) ?? num(man.filament_mm) ?? num(man.filament_total_mm);
   const gFromMm = mmToGrams(mm);
   if (gFromMm != null) return gFromMm;
 
   return null;
 }
 
-/* ===== FALLBACK: parse filament จาก G-code text ===== */
+/* ===== fallback parse from G-code tail ===== */
 const rxG = [
   /filament\s*used[^0-9\[]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*g/i,
   /filament\s*used\s*\[g\]\s*=\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
@@ -194,9 +165,7 @@ const mapManifest = (man = {}) => {
     layer: num(applied.first_layer_height ?? applied.layer_height),
     nozzle: num(applied.nozzle) ?? guessNozzle(presets.printer),
     infill: fromPercent(applied.fill_density),
-    supports: applied.support
-      ? String(applied.support).toLowerCase() !== "none"
-      : null,
+    supports: applied.support ? String(applied.support).toLowerCase() !== "none" : null,
     model: deriveModelFromKey(man.gcode_key) || null,
   };
 
@@ -216,11 +185,50 @@ const mapManifest = (man = {}) => {
   return { template, stats, keys };
 };
 
-/* ---- small helpers ---- */
-const jsonKeyFromGcodeKey = (k) =>
-  (k ? String(k).replace(/\.(gcode|gco|gc)$/i, ".json") : null);
-const urlWithToken = (key, token) =>
-  (key ? objectKeyToUrl(key, token) : null);
+/* ---- URL helpers (encodeURIComponent ครบ) ---- */
+function joinUrl(base, path) {
+  try {
+    const b = String(base || "").trim();
+    const p = String(path || "");
+    const origin = (typeof window !== "undefined" && window.location?.origin) || "";
+    return new URL(p, b ? (b.endsWith("/") ? b : b + "/") : origin + "/").toString();
+  } catch { return path; }
+}
+function withToken(u, tkn) {
+  if (!tkn) return u;
+  try { const url = new URL(u); url.searchParams.set("token", tkn); return url.toString(); }
+  catch { const sep = u.includes("?") ? "&" : "?"; return `${u}${sep}token=${encodeURIComponent(tkn)}`; }
+}
+function toRawUrl(apiBase, objectKey, token) {
+  const path = `/files/raw?object_key=${encodeURIComponent(objectKey)}`;
+  return withToken(joinUrl(apiBase, path), token);
+}
+
+/* ---- Preview candidate: .png → .jpg → .jpeg (space และ +) ---- */
+function derivePreviewCandidatesFromKey(keyWithExt) {
+  if (!keyWithExt) return [];
+  const dot = keyWithExt.lastIndexOf(".");
+  const base = dot >= 0 ? keyWithExt.slice(0, dot) : keyWithExt;
+  const spaceBase = base.replace(/\+/g, " ");
+  const plusBase  = base.replace(/ /g, "+");
+  const pack = (b) => ([
+    `${b}.preview.png`,   `${b}_preview.png`,
+    `${b}.preview.jpg`,   `${b}_preview.jpg`,
+    `${b}.preview.jpeg`,  `${b}_preview.jpeg`,
+  ]);
+  return plusBase !== spaceBase ? [...pack(spaceBase), ...pack(plusBase)] : pack(spaceBase);
+}
+
+/* ---- Fallback icon (SVG data-uri) ---- */
+const FALLBACK_ICON =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 128 96" aria-hidden="true">
+      <rect x="8" y="8" width="112" height="80" rx="8" ry="8" fill="#eef1f5" stroke="#c9d0d8"/>
+      <path d="M20 74 L48 46 L68 60 L88 40 L108 74 Z" fill="#d6dde6" stroke="#aab6c3"/>
+      <circle cx="40" cy="34" r="8" fill="#c1cddd"/>
+    </svg>`
+  );
 
 export default function StorageReprintModal({ open, file, onClose, onPrint }) {
   const api = useApi();
@@ -233,9 +241,7 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
   const [err, setErr] = useState("");
   const [manifest, setManifest] = useState(null);
   const [manLoaded, setManLoaded] = useState(false);
-  const [gramsFromGcode, setGramsFromGcode] = useState(null); // fallback grams
-
-  // ป้องกัน Enter ยิง submit ซ้ำกับ click
+  const [gramsFromGcode, setGramsFromGcode] = useState(null);
   const lastEnterAtRef = useRef(0);
 
   /* reset on open/file change */
@@ -246,90 +252,58 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
     setGramsFromGcode(null);
   }, [open, file]);
 
-  /* ---- load manifest JSON lazily when modal opens ---- */
+  /* ---- load manifest lazily ---- */
+  const jsonKeyFromGcodeKey = (k) => (k ? String(k).replace(/\.(gcode|gco|gc)$/i, ".json") : null);
   useEffect(() => {
     let stop = false;
 
     const jsonKeyInitial = f._raw?.json_key || f.json_key;
     const gkFallback =
-      f.gcode_key ||
-      f.object_key ||
-      f._raw?.object_key ||
-      f.file?.object_key ||
-      null;
+      f.gcode_key || f.object_key || f._raw?.object_key || f.file?.object_key || null;
     const jsonKey = jsonKeyInitial || jsonKeyFromGcodeKey(gkFallback);
 
     const load = async () => {
       if (!open || !jsonKey || manLoaded) return;
       try {
-        const url = `${api.API_BASE}/files/raw?object_key=${encodeURIComponent(
-          jsonKey
-        )}&_ts=${Date.now()}`;
-        const res = await fetch(url, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
+        const url = `${api.API_BASE}/files/raw?object_key=${encodeURIComponent(jsonKey)}&_ts=${Date.now()}`;
+        const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+        if (res.status === 404) { if (!stop) setManLoaded(true); return; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!stop) {
-          setManifest(data);
-          setManLoaded(true);
-        }
+        if (!stop) { setManifest(data); setManLoaded(true); }
       } catch (e) {
         console.warn("manifest load failed:", e);
         if (!stop) setManLoaded(true);
       }
     };
     load();
-    return () => {
-      stop = true;
-    };
+    return () => { stop = true; };
   }, [open, file, api.API_BASE, token, manLoaded]);
 
-  const manMapped = useMemo(
-    () => (manifest ? mapManifest(manifest) : null),
-    [manifest]
-  );
+  const manMapped = useMemo(() => (manifest ? mapManifest(manifest) : null), [manifest]);
 
   /* ---- keys / readiness ---- */
   let gcodeKey =
-    f.gcode_key ||
-    f.object_key ||
-    f._raw?.object_key ||
-    f.file?.object_key ||
-    baseTpl.gcode_key ||
-    null;
+    f.gcode_key || f.object_key || f._raw?.object_key || f.file?.object_key || baseTpl.gcode_key || null;
   if (manMapped?.keys?.gcode_key) gcodeKey = manMapped.keys.gcode_key;
 
-  const extNow = upper(
-    f.ext || extFromKey(f.object_key || f._raw?.object_key || gcodeKey)
-  );
+  const extNow = upper(f.ext || extFromKey(f.object_key || f._raw?.object_key || gcodeKey));
   const isGcode = Boolean(f.isGcode || isGcodeExt(extNow));
   const isReady = isGcode && !!gcodeKey;
 
-  /* ---- Fallback: ถ้า manifest ไม่ได้กรัม → อ่านท้ายไฟล์แล้ว parse เอง ---- */
+  /* ---- fallback grams from gcode tail ---- */
   useEffect(() => {
     let stop = false;
-    const needFallback =
-      open &&
-      isReady &&
-      (manMapped?.stats?.grams == null ||
-        Number(manMapped?.stats?.grams) === 0);
-
-    if (!needFallback) {
-      setGramsFromGcode(null);
-      return;
-    }
+    const needFallback = open && isReady && (manMapped?.stats?.grams == null || Number(manMapped?.stats?.grams) === 0);
+    if (!needFallback) { setGramsFromGcode(null); return; }
 
     (async () => {
       try {
-        const url =
-          `${api.API_BASE}/api/storage/range?` +
-          `object_key=${encodeURIComponent(
-            gcodeKey
-          )}&start=-4000000&length=4000000&_ts=${Date.now()}`;
-        const res = await fetch(url, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
+        const url = `${api.API_BASE}/api/storage/range?object_key=${encodeURIComponent(
+          gcodeKey
+        )}&start=-4000000&length=4000000&_ts=${Date.now()}`;
+        const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+        if (res.status === 404) { if (!stop) setGramsFromGcode(null); return; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const txt = await res.text();
         if (stop) return;
@@ -341,12 +315,10 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
       }
     })();
 
-    return () => {
-      stop = true;
-    };
+    return () => { stop = true; };
   }, [open, isReady, api.API_BASE, token, gcodeKey, manMapped?.stats?.grams]);
 
-  /* ---- merged template to show (ให้ manifest ชนะ) ---- */
+  /* ---- merged template (manifest wins) ---- */
   const t = useMemo(
     () => ({
       ...(manMapped?.template || {}),
@@ -360,106 +332,83 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
     [baseTpl, manMapped, f.object_key, f._raw]
   );
 
-  /* ---- stats (prefer manifest, then stored, then estimate) ---- */
+  /* ---- stats ---- */
   const storedStats = useMemo(() => {
     const s = f.stats || f._raw?.stats || {};
     const grams = toNumber(s.filament_g_total ?? s.filament_g);
     const minutes = Number.isFinite(s.est_time_min ?? s.time_min)
-      ? Math.round(s.est_time_min ?? s.time_min)
-      : null;
+      ? Math.round(s.est_time_min ?? s.time_min) : null;
     const timeText = s.time_text || (minutes != null ? fmtHM(minutes) : null);
-    if (grams != null || minutes != null || timeText)
-      return { grams, minutes, timeText };
+    if (grams != null || minutes != null || timeText) return { grams, minutes, timeText };
 
     const gramsTplRaw =
-      toNumber(baseTpl.filament_g) ??
-      toNumber(baseTpl.filamentGrams) ??
-      toNumber(baseTpl.usedFilament) ??
-      toNumber(baseTpl.filament);
+      toNumber(baseTpl.filament_g) ?? toNumber(baseTpl.filamentGrams) ??
+      toNumber(baseTpl.usedFilament) ?? toNumber(baseTpl.filament);
     const gramsTpl = gramsTplRaw && gramsTplRaw > 0 ? gramsTplRaw : null;
 
-    const sec =
-      toNumber(baseTpl.timeSec) ??
-      toNumber(baseTpl.printTimeSec) ??
-      toNumber(baseTpl.slicer_time_sec);
+    const sec = toNumber(baseTpl.timeSec) ?? toNumber(baseTpl.printTimeSec) ?? toNumber(baseTpl.slicer_time_sec);
+    const minRaw = toNumber(baseTpl.timeMin) ?? toNumber(baseTpl.printTimeMin) ?? toNumber(baseTpl.slicer_time_min);
+    const totalMin = Number.isFinite(sec) ? Math.round(sec / 60) : Number.isFinite(minRaw) ? Math.round(minRaw) : null;
 
-    const minRaw =
-      toNumber(baseTpl.timeMin) ??
-      toNumber(baseTpl.printTimeMin) ??
-      toNumber(baseTpl.slicer_time_min);
-
-    const totalMin = Number.isFinite(sec)
-      ? Math.round(sec / 60)
-      : Number.isFinite(minRaw)
-      ? Math.round(minRaw)
-      : null;
-    return {
-      grams: gramsTpl ?? null,
-      minutes: totalMin,
-      timeText: totalMin != null ? fmtHM(totalMin) : null,
-    };
+    return { grams: gramsTpl ?? null, minutes: totalMin, timeText: totalMin != null ? fmtHM(totalMin) : null };
   }, [f.stats, f._raw, baseTpl]);
 
   const estimate = useMemo(() => {
-    if (manMapped?.stats) return manMapped.stats; // manifest wins
+    if (manMapped?.stats) return manMapped.stats;
     if (!isReady) return { grams: null, minutes: null, timeText: null };
-    const baseG = 40,
-      baseMin = 90;
+    const baseG = 40, baseMin = 90;
     const layer = Number((baseTpl.layer ?? t.layer ?? 0.2)) || 0.2;
-    const infill =
-      Number((baseTpl.infill ?? t.infill ?? t.sparseInfillDensity ?? 15)) || 15;
+    const infill = Number((baseTpl.infill ?? t.infill ?? t.sparseInfillDensity ?? 15)) || 15;
     const supports = !!(baseTpl.supports ?? t.supports);
     const layerFactor = 0.2 / layer;
     const infillFactor = (10 + infill) / 25;
     const supportFactor = supports ? 1.15 : 1;
     const grams = Math.round(baseG * infillFactor * supportFactor);
-    const minutes = Math.round(
-      baseMin * layerFactor * infillFactor * supportFactor
-    );
+    const minutes = Math.round(baseMin * layerFactor * infillFactor * supportFactor);
     return { grams, minutes, timeText: fmtHM(minutes) };
   }, [isReady, manMapped, baseTpl, t]);
 
-  /* ---- displays ---- */
   const gramsDisplay =
     gramsFromGcode != null
       ? gramsFromGcode
       : manMapped?.stats?.grams ?? storedStats.grams ?? estimate.grams;
-  const usedGramsText =
-    gramsDisplay != null ? `${Number(gramsDisplay).toFixed(2)} g` : "-";
-
+  const usedGramsText = gramsDisplay != null ? `${Number(gramsDisplay).toFixed(2)} g` : "-";
   const timeText =
     manMapped?.stats?.timeText ?? storedStats.timeText ?? estimate.timeText ?? "-";
   const timeLabel =
     manMapped?.stats?.timeText || storedStats.timeText ? "Time" : "Estimated Time";
 
   const uploadedDisplay = f.uploadedAt || fmtDateTime(f.uploadedTs) || "-";
-  const sizeDisplay =
-    f.sizeText || (Number.isFinite(f.size) ? fmtBytes(f.size) : "-");
+  const sizeDisplay = f.sizeText || (Number.isFinite(f.size) ? fmtBytes(f.size) : "-");
 
-  const toRawUrl = (key) => urlWithToken(key, token);
+  // ---- Build preview URL (เข้ารหัส object_key อย่างถูกต้อง) ----
+  const previewSrc = useMemo(() => {
+    // 1) จาก manifest
+    const manPreview = manMapped?.keys?.preview_key;
+    if (manPreview) return toRawUrl(api.API_BASE, manPreview, token);
 
-  // เลือกพรีวิวจาก MinIO ก่อนเสมอ
-  const previewKeyFromMan = manMapped?.keys?.preview_key || null;
-  const derivedPreviewKey =
-    !previewKeyFromMan && gcodeKey
-      ? String(gcodeKey).replace(/\.(gcode|gco|gc)$/i, ".preview.png")
-      : null;
+    // 2) จาก thumb (key หรือ URL)
+    if (typeof f.thumb === "string") {
+      if (/^https?:\/\//i.test(f.thumb) || f.thumb.startsWith("data:")) return f.thumb;
+      return toRawUrl(api.API_BASE, f.thumb, token);
+    }
 
-  const previewSrc =
-    (previewKeyFromMan && toRawUrl(previewKeyFromMan)) ||
-    (derivedPreviewKey && toRawUrl(derivedPreviewKey)) ||
-    f._raw?.preview_url ||
-    baseTpl.preview ||
-    f.thumb ||
-    "/images/placeholder-model.png";
+    // 3) เดาจาก gcode/object key → candidate แรก (ถ้า 404 onError จะ fallback)
+    const keyBase =
+      f.gcode_key || f.object_key || f._raw?.object_key || f.file?.object_key || (manMapped?.keys?.gcode_key) || "";
+    if (keyBase) {
+      const cand = derivePreviewCandidatesFromKey(keyBase)[0];
+      if (cand) return toRawUrl(api.API_BASE, cand, token);
+    }
 
-  // ---------- idempotency key (ฝั่ง FE) ----------
-  // เดิมเรากันที่ server แล้ว แต่แนบ header เพิ่มความชัวร์
+    // 4) ไม่มี → data URI
+    return FALLBACK_ICON;
+  }, [api.API_BASE, token, f.thumb, f.gcode_key, f.object_key, f._raw, f.file, manMapped]);
+
+  // ---------- idempotency key ----------
   const idemKey =
-    gcodeKey && t.printer
-      ? `reprint:${normalizePrinterId(t.printer)}:${gcodeKey}`
-      : gcodeKey
-      ? `reprint:prusa-core-one:${gcodeKey}`
+    (t.printer ? normalizePrinterId(t.printer) : "prusa-core-one") && gcodeKey
+      ? `reprint:${normalizePrinterId(t.printer || "prusa-core-one")}:${gcodeKey}`
       : `reprint:unknown:${Date.now()}`;
 
   /* ---- submit ---- */
@@ -475,9 +424,7 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
         gcode_key: gcodeKey,
         original_key: f.original_key || null,
         time_min:
-          (manMapped?.stats?.minutes ??
-            storedStats.minutes ??
-            estimate.minutes) ?? undefined,
+          (manMapped?.stats?.minutes ?? storedStats.minutes ?? estimate.minutes) ?? undefined,
         time_text: timeText ?? undefined,
         filament_g: gramsDisplay ?? undefined,
         model: t.model ?? undefined,
@@ -492,19 +439,12 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
         "/api/print",
         payload,
         { printer_id: printerId },
-        {
-          timeoutMs: 15000,
-          headers: { "Idempotency-Key": idemKey }, // ✅ กันซ้ำที่ BE ถ้ารองรับ
-        }
+        { timeoutMs: 15000, headers: { "Idempotency-Key": idemKey } }
       );
 
       onPrint?.(payload);
       try {
-        window.dispatchEvent(
-          new CustomEvent("toast", {
-            detail: { type: "success", text: "Queued to printer" },
-          })
-        );
+        window.dispatchEvent(new CustomEvent("toast", { detail: { type: "success", text: "Queued to printer" } }));
       } catch {}
       onClose?.();
     } catch (e) {
@@ -514,25 +454,9 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
       setSubmitting(false);
     }
   }, [
-    api,
-    estimate.minutes,
-    f.name,
-    f.original_key,
-    gcodeKey,
-    gramsDisplay,
-    idemKey,
-    isReady,
-    manMapped?.stats?.minutes,
-    onClose,
-    onPrint,
-    previewSrc,
-    storedStats.minutes,
-    submitting,
-    t.material,
-    t.model,
-    t.name,
-    t.printer,
-    timeText,
+    api, estimate.minutes, f.name, f.original_key, gcodeKey, gramsDisplay, idemKey,
+    isReady, manMapped?.stats?.minutes, onClose, onPrint, previewSrc,
+    storedStats.minutes, submitting, t.material, t.model, t.name, t.printer, timeText,
   ]);
 
   /* ---- lifecycle / a11y ---- */
@@ -541,25 +465,17 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose?.();
-        return;
-      }
+      if (e.key === "Escape") { e.preventDefault(); onClose?.(); return; }
       if (e.key === "Enter") {
-        // กัน trigger ซ้ำกับการที่ Enter ทำให้ปุ่มถูก "click" อัตโนมัติ
         const now = Date.now();
-        if (now - lastEnterAtRef.current < 1200) return; // throttle 1.2s
+        if (now - lastEnterAtRef.current < 1200) return;
         lastEnterAtRef.current = now;
         e.preventDefault();
         if (!submitting) submit();
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); };
   }, [open, onClose, submit, submitting]);
 
   if (!open || !file) return null;
@@ -567,9 +483,7 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
   return (
     <div className="rp-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <div className="rp-modal" onClick={(e) => e.stopPropagation()}>
-        <button className="rp-close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
+        <button className="rp-close" onClick={onClose} aria-label="Close">×</button>
 
         <div className="rp-header">
           <h2 className="rp-title">Reprint from Storage</h2>
@@ -585,27 +499,19 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
               <img
                 src={previewSrc}
                 alt="Model preview"
-                onError={(e) => {
-                  e.currentTarget.src = "/images/placeholder-model.png";
-                }}
+                onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_ICON; }}
+                loading="lazy"
+                decoding="async"
               />
             </div>
 
             <div className="rp-block">
               <h3>File Info</h3>
               <dl className="rp-dl">
-                <dt>Uploaded</dt>
-                <dd>{uploadedDisplay}</dd>
-                <dt>Size</dt>
-                <dd>{sizeDisplay}</dd>
-                <dt>Type</dt>
-                <dd>{isGcode ? "G-code" : upper(f.ext) || "-"}</dd>
-                {f.uploader && (
-                  <>
-                    <dt>Uploader</dt>
-                    <dd>{f.uploader}</dd>
-                  </>
-                )}
+                <dt>Uploaded</dt><dd>{uploadedDisplay}</dd>
+                <dt>Size</dt><dd>{sizeDisplay}</dd>
+                <dt>Type</dt><dd>{isGcode ? "G-code" : upper(f.ext) || "-"}</dd>
+                {f.uploader && (<><dt>Uploader</dt><dd>{f.uploader}</dd></>)}
               </dl>
             </div>
           </div>
@@ -615,55 +521,22 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
             <div className="rp-block">
               <h3>Print Template</h3>
               <dl className="rp-dl">
-                <dt>Profile</dt>
-                <dd>{t.profile || "-"}</dd>
-                <dt>Model</dt>
-                <dd>{t.model || f.model || "-"}</dd>
-                <dt>Printer</dt>
-                <dd>{t.printer || "-"}</dd>
-                {t.material != null && (
-                  <>
-                    <dt>Material</dt>
-                    <dd>{t.material}</dd>
-                  </>
-                )}
-                {t.layer != null && (
-                  <>
-                    <dt>Layer height</dt>
-                    <dd>{t.layer} mm</dd>
-                  </>
-                )}
+                <dt>Profile</dt><dd>{t.profile || "-"}</dd>
+                <dt>Model</dt><dd>{t.model || f.model || "-"}</dd>
+                <dt>Printer</dt><dd>{t.printer || "-"}</dd>
+                {t.material != null && (<><dt>Material</dt><dd>{t.material}</dd></>)}
+                {t.layer != null && (<><dt>Layer height</dt><dd>{t.layer} mm</dd></>)}
                 <dt>Infill</dt>
-                <dd>
-                  {t.infill != null
-                    ? `${t.infill}%`
-                    : t.sparseInfillDensity != null
-                    ? `${t.sparseInfillDensity}%`
-                    : "-"}
-                </dd>
-                <dt>Supports</dt>
-                <dd>
-                  {t.supports != null ? (t.supports ? "Yes" : "No") : "-"}
-                </dd>
-                {t.wallLoops != null && (
-                  <>
-                    <dt>Wall loops</dt>
-                    <dd>{t.wallLoops}</dd>
-                  </>
-                )}
+                <dd>{t.infill != null ? `${t.infill}%` : t.sparseInfillDensity != null ? `${t.sparseInfillDensity}%` : "-"}</dd>
+                <dt>Supports</dt><dd>{t.supports != null ? (t.supports ? "Yes" : "No") : "-"}</dd>
+                {t.wallLoops != null && (<><dt>Wall loops</dt><dd>{t.wallLoops}</dd></>)}
               </dl>
             </div>
 
             {/* summary pills */}
             <div className="rp-summary" aria-live="polite">
-              <div className="rp-pill">
-                <strong>Used Filament</strong>
-                <span>{usedGramsText}</span>
-              </div>
-              <div className="rp-pill">
-                <strong>{timeLabel}</strong>
-                <span>{timeText}</span>
-              </div>
+              <div className="rp-pill"><strong>Used Filament</strong><span>{usedGramsText}</span></div>
+              <div className="rp-pill"><strong>{timeLabel}</strong><span>{timeText}</span></div>
             </div>
 
             {err && <div className="rp-error">{err}</div>}
@@ -672,23 +545,13 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
 
         {/* sticky actions */}
         <div className="rp-actions">
-          <button
-            className="rp-btn rp-btn--ghost"
-            onClick={onClose}
-            disabled={submitting}
-          >
-            Close
-          </button>
+          <button className="rp-btn rp-btn--ghost" onClick={onClose} disabled={submitting}>Close</button>
           <button
             className="rp-btn rp-cta"
             onClick={submit}
             disabled={!isReady || submitting}
             aria-busy={submitting ? "true" : "false"}
-            title={
-              !isReady
-                ? "This item is not a valid G-code or missing key"
-                : "Print again"
-            }
+            title={!isReady ? "This item is not a valid G-code or missing key" : "Print again"}
           >
             {submitting ? "Queuing..." : "Print again"}
           </button>
