@@ -275,8 +275,23 @@ if STORAGE_BACKEND == "local":
 def include_both(router, *, name: str):
     if router is None:
         logging.warning("[main] skip include: %s (router is None)", name); return
+    # เส้นทั้งหมดของ router นี้
+    paths = []
+    try:
+        from fastapi.routing import APIRoute
+        for r in getattr(router, "routes", []):
+            if isinstance(r, APIRoute):
+                paths.append(r.path or "")
+    except Exception:
+        pass
+
+    # include ปกติ (ตาม prefix ของ router)
     app.include_router(router)
-    app.include_router(router, prefix="/api", include_in_schema=False)
+
+    # ถ้าทุก path เริ่มด้วย /api/ อยู่แล้ว ไม่ต้อง include ซ้ำใต้ /api อีก
+    has_api_prefix = paths and all(p.startswith("/api/") for p in paths if p)
+    if not has_api_prefix:
+        app.include_router(router, prefix="/api", include_in_schema=False)
 
 include_both(notifications_router, name="notifications")
 include_both(printer_status_router, name="printer_status")
@@ -309,26 +324,6 @@ def _resolve_catalog_handler():
 
 @app.get("/storage/catalog", tags=["storage"])
 def storage_catalog_proxy(
-    model: Optional[str] = Query(None, description="DELTA | HONTECH | (เว้นว่าง=ทั้งหมด)"),
-    q: Optional[str] = Query(None, description="ค้นหาชื่อ"),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=2000),
-    with_urls: bool = Query(False),
-    with_head: bool = Query(False),
-    db: Session = Depends(get_db),
-    _me: User = Depends(get_current_user),
-):
-    fn = _resolve_catalog_handler()
-    if not fn:
-        raise HTTPException(status_code=501, detail="catalog endpoint not implemented in storage backend")
-    try:
-        return fn(model=model, q=q, offset=offset, limit=limit, with_urls=with_urls, with_head=with_head, db=db, _me=_me)
-    except Exception as e:
-        logging.exception("list_catalog failed")
-        raise HTTPException(status_code=500, detail=f"catalog error: {e!r}")
-
-@app.get("/api/storage/catalog", tags=["storage"])
-def storage_catalog_api_proxy(
     model: Optional[str] = Query(None, description="DELTA | HONTECH | (เว้นว่าง=ทั้งหมด)"),
     q: Optional[str] = Query(None, description="ค้นหาชื่อ"),
     offset: int = Query(0, ge=0),
