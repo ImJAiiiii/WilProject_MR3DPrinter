@@ -2,17 +2,26 @@
 const LS_HISTORY = "userHistory";
 const MAX_ITEMS_PER_USER = 200;
 
-// ปลอดภัยกับค่าที่ไม่ใช่สตริง
+// =========================
+// Utility
+// =========================
 const safeStr = (v) => (v == null ? "" : String(v));
 
-export function loadHistoryMap() {
+function safeJSONParse(raw) {
   try {
-    const raw = localStorage.getItem(LS_HISTORY);
-    const obj = raw ? JSON.parse(raw) : {};
-    return typeof obj === "object" && obj ? obj : {};
+    return JSON.parse(raw);
   } catch {
-    return {};
+    return null;
   }
+}
+
+// =========================
+// LocalStorage (offline)
+// =========================
+export function loadHistoryMap() {
+  const raw = localStorage.getItem(LS_HISTORY);
+  const obj = safeJSONParse(raw);
+  return typeof obj === "object" && obj ? obj : {};
 }
 
 export function saveHistoryMap(map) {
@@ -21,16 +30,18 @@ export function saveHistoryMap(map) {
   } catch {}
 }
 
-// ใช้ UUID จริงถ้ามี ให้ fallback เป็น timestamp
 export function newId() {
-  try { return crypto.randomUUID(); } catch { return "id_" + Date.now() + "_" + Math.random().toString(16).slice(2); }
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return "id_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+  }
 }
 
 /**
  * บันทึก 1 รายการเข้า history ของ userId
  * - append ด้านหน้า (unshift)
- * - ไม่ใช้ object_key/name เป็น id (กันชนกัน) => ใช้ UUID แยกแต่ละครั้ง
- * - เก็บ template/stats/file ให้ครบ เพื่อให้หน้าประวัติแสดงได้เต็ม
+ * - limit 200
  */
 export function appendHistory(userId, item) {
   const map = loadHistoryMap();
@@ -38,33 +49,62 @@ export function appendHistory(userId, item) {
   const arr = Array.isArray(map[k]) ? map[k] : [];
 
   const normalized = {
-    id: newId(),                // <— id ใหม่ทุกครั้ง กันทับ
+    id: newId(),
     uploadedAt: new Date().toISOString(),
     name: item?.name || item?.file?.name || "Unnamed",
     thumb: item?.thumb || item?.file?.thumb || item?.template?.preview || "/images/3D.png",
-    // เก็บ template/stats/file ต้นฉบับไว้เต็ม ๆ
     template: item?.template ?? null,
-    stats:    item?.stats ?? null,
-    file:     item?.file ?? null,
-    // เผื่อใช้กับ reprint/queue
-    source:   item?.source || "upload",
+    stats: item?.stats ?? null,
+    file: item?.file ?? null,
+    source: item?.source || "upload",
     gcode_key: item?.gcode_key || null,
     gcode_path: item?.gcode_path || null,
   };
 
-  // ไม่ dedupe ตาม object_key เพื่อ “ไม่ทับ” งานเก่า
   arr.unshift(normalized);
-
-  // limit เพื่อกันโตเกินไป
   while (arr.length > MAX_ITEMS_PER_USER) arr.pop();
 
   map[k] = arr;
   saveHistoryMap(map);
 }
 
-/** ดึงรายการของผู้ใช้เดียว (array) */
-export function getUserHistory(userId) {
+export function getUserHistoryLocal(userId) {
   const map = loadHistoryMap();
   const arr = Array.isArray(map[safeStr(userId)]) ? map[safeStr(userId)] : [];
   return arr;
 }
+
+// =========================
+// Backend API Integration
+// =========================
+export async function fetchUserHistory(apiBase, token, { limit = 200 } = {}) {
+  try {
+    const url = `${apiBase.replace(/\/$/, "")}/api/history/my?limit=${limit}`;
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+
+    // ตรวจสอบว่าเป็น array จริง
+    if (!Array.isArray(data)) throw new Error("Invalid response format");
+    console.log(`[history] fetched ${data.length} records from backend`);
+    return data;
+  } catch (err) {
+    console.warn("⚠️ fetchUserHistory failed → fallback to localStorage:", err);
+    return [];
+  }
+}
+
+// =========================
+// Combined Loader
+// =========================
+export async function loadHistory(userId, apiBase, token) {
+  const backendData = await fetchUserHistory(apiBase, token);
+  if (backendData.length > 0) {
+    return backendData;
+  }
+  // fallback to local storage
+  return getUserHistoryLocal(userId);
+}
+export const getUserHistory = getUserHistoryLocal;

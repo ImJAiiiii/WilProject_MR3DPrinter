@@ -1,283 +1,372 @@
 # backend/print_history.py
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from db import get_db
 from auth import get_current_user
 from models import User, PrintJob
-from print_queue import _ensure_storage_record as ensure_storage_record  # idempotent helper
+from schemas import PrintJobOut, PrintJobFileMeta
+
+# ใช้ helper เดิมเพื่อ ensure แถวใน storage_files จาก object_key (idempotent)
+from print_queue import _ensure_storage_record as ensure_storage_record
 
 router = APIRouter(prefix="/history", tags=["history"])
 log = logging.getLogger("history")
 
 
 # -------------------------------------------------------------------
-# helpers / json utils
+# Utilities
 # -------------------------------------------------------------------
+
 def _emp(x: object) -> str:
     return (str(x or "")).strip()
 
 
-def _to_dict(v: Any) -> Optional[dict]:
-    """Accepts dict / JSON string / SQLAlchemy-JSON-like -> dict | None"""
-    if v is None:
+def _json_like_to_dict(val: Any) -> Optional[dict]:
+    if val is None:
         return None
-    if isinstance(v, dict):
-        return v
-    if isinstance(v, str):
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
         try:
-            return json.loads(v)
+            import json
+            return json.loads(val)
         except Exception:
             return None
     try:
-        return dict(v)  # Mapping-like
+        return dict(val)
     except Exception:
         return None
 
 
-def _pick(*vals: Optional[str]) -> Optional[str]:
-    for v in vals:
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
+def _merge_template_with_settings(template: Optional[dict], settings: Optional[dict]) -> Optional[dict]:
+    if not template and not settings:
+        return template or settings
+    base = dict(template or {})
+    if settings:
+        for k, v in settings.items():
+            if (k not in base) or (base[k] in (None, "", 0, False)):
+                base[k] = v
+    return base
 
 
-def _derive_name_from_key(key: str) -> str:
-    base = os.path.basename(key)
-    root, _ = os.path.splitext(base)
-    return root or base
+def _is_gcode_key(k: Optional[str]) -> bool:
+    if not k:
+        return False
+    kl = k.lower()
+    return kl.endswith((".gcode", ".gco", ".gc"))
 
 
-def _get_from_maps(tj: dict, sj: dict, keys: list[str]) -> Optional[str]:
+def _folder_name_from_key(key: str) -> Optional[str]:
     """
-    ดึงค่าจาก template > stats ตามลำดับ โดยรองรับหลายชื่อคีย์ (synonyms)
+    ดึงชื่อโฟลเดอร์สุดท้ายจาก object_key เช่น
+    catalog/Hontech/HT_CamMount_V1/Camera Mounting_oriented.gcode -> HT_CamMount_V1
     """
-    for src in (tj or {}), (sj or {}):
-        for k in keys:
-            v = src.get(k) if isinstance(src, dict) else None
-            if isinstance(v, (str, int, float)) and str(v).strip():
-                return str(v).strip()
-    return None
+    try:
+        d = os.path.dirname(key).strip("/\\")
+        if not d:
+            return None
+        return d.split("/")[-1] or None
+    except Exception:
+        return None
 
 
-# -------------------------------------------------------------------
-# preview helpers (BACKEND เป็นคนตัดสิน)
-# -------------------------------------------------------------------
-def _preview_candidates_from_gcode_key(gk: Optional[str]) -> list[str]:
+def _preview_candidates(dir_: str, root: str) -> List[str]:
     """
-    สร้างผู้สมัคร key สำหรับไฟล์พรีวิวจาก gcode/object key:
-      - ตัด '_oriented' ออก (เคสที่เจอบ่อย)
-      - ลองเติม '_preview' และ '_thumb'
-      - ลองสลับนามสกุล .png/.jpg/.jpeg
-    * ไม่ทำ URL-encode ที่นี่
+    สร้างลิสต์ชื่อไฟล์ preview ที่เป็นไปได้:
+    - {root}.preview.png / {root}_preview.png
+    - รองรับ .png/.jpg/.jpeg
+    - รองรับเคสมี/ไม่มี _oriented
     """
-    if not gk:
-        return []
-    base, _ext = os.path.splitext(gk)
-    dir_ = os.path.dirname(gk)
-    base_name = os.path.basename(base)
-    base_no_oriented = base_name.replace("_oriented", "")
+    root_no_oriented = root.replace("_oriented", "")
+    bases = [
+        root,                       # Camera Mounting_oriented
+        root_no_oriented,           # Camera Mounting
+        f"{root_no_oriented}_oriented",  # Camera Mounting_oriented (เผื่อกรณีตั้งชื่อแตกต่าง)
+    ]
+    exts = ["png", "jpg", "jpeg"]
+    patterns = [
+        "{b}.preview.{e}",
+        "{b}_preview.{e}",
+        "{b}_thumb.{e}",
+        # เผื่อบางที่ใช้รูปแบบมีจุดและขีดล่างผสม
+        "{b}_oriented.preview.{e}",
+        "{b}_oriented_preview.{e}",
+    ]
 
-    exts = [".png", ".jpg", ".jpeg"]
-    names: list[str] = []
-
-    # 1) ..._preview.{ext}
-    for e in exts:
-        names.append(f"{base_name}_preview{e}")
-        names.append(f"{base_no_oriented}_preview{e}")
-
-    # 2) ..._thumb.{ext}
-    for e in exts:
-        names.append(f"{base_name}_thumb{e}")
-        names.append(f"{base_no_oriented}_thumb{e}")
-
-    # 3) ...{ext} (ไม่เติม preview/thumb)
-    for e in exts:
-        names.append(f"{base_name}{e}")
-        names.append(f"{base_no_oriented}{e}")
-
-    return [f"{dir_}/{n}" if dir_ else n for n in names]
-
-
-def _ensure_file_block(job: PrintJob) -> Dict[str, Optional[str]]:
-    """Compose 'file' block (เหมาะกับ CustomStore) และคัด preview ฝั่ง backend"""
-    fj = _to_dict(getattr(job, "file_json", None)) or _to_dict(getattr(job, "file", None)) or {}
-    sj = _to_dict(getattr(job, "stats_json", None)) or _to_dict(getattr(job, "stats", None)) or {}
-
-    gk = _pick(
-        fj.get("gcode_key") if isinstance(fj, dict) else None,
-        fj.get("object_key") if isinstance(fj, dict) else None,
-        fj.get("key") if isinstance(fj, dict) else None,
-        sj.get("gcode_key") if isinstance(sj, dict) else None,
-        getattr(job, "gcode_key", None),
-        getattr(job, "original_key", None),
-        getattr(job, "gcode_path", None),
-    )
-
-    # ชื่อไฟล์ที่แสดง
-    name = None
-    if isinstance(fj, dict):
-        name = _pick(fj.get("display_name"), fj.get("name"))
-    if not name and gk:
-        name = _derive_name_from_key(gk)
-
-    # preview ที่ backend จัดให้
-    preview_url = None   # URL ตรง (ถ้ามี)
-    preview_key = None   # object key (ให้ FE ไป presign)
-    if isinstance(fj, dict):
-        preview_url = _pick(fj.get("preview_url"), fj.get("preview"))
-        preview_key = _pick(fj.get("preview_key"), fj.get("preview_png"), fj.get("thumb"))
-
-    # ถ้าไม่มีทั้งสองอย่าง แต่มี gcode_key → สร้างผู้สมัครชื่อไฟล์ที่เป็นไปได้บ่อย
-    if not preview_url and not preview_key and gk:
-        cands = _preview_candidates_from_gcode_key(gk)
-        if cands:
-            preview_key = cands[0]  # เลือกตัวแรก (ไม่เรียก S3 head ที่นี่)
-
-    return {
-        "gcode_key": gk,
-        "name": name,
-        "preview_key": preview_key,
-        "preview_url": preview_url,
-    }
+    out: List[str] = []
+    for b in bases:
+        for e in exts:
+            for p in patterns:
+                out.append(f"{dir_}/{p.format(b=b, e=e)}" if dir_ else p.format(b=b, e=e))
+    # unique order
+    seen, uniq = set(), []
+    for k in out:
+        if k not in seen:
+            uniq.append(k)
+            seen.add(k)
+    return uniq
 
 
-def _client_job_dict(job: PrintJob, employee_name: str) -> dict:
+def _ensure_out_file(out: PrintJobOut) -> None:
+    if out.file is None:
+        out.file = PrintJobFileMeta()
+
+
+def _set_thumb_if_found(out: PrintJobOut, key: str) -> None:
     """
-    Flatten ORM row -> dict for FE.
-    Always returns: id, status, time_min, employee_name, uploaded_at/finished_at,
-    template{name, layer, walls, infill}, stats{time_min},
-    file{gcode_key,name,preview_key,preview_url}
-    และเพิ่มฟิลด์ระดับบนสุด: display_name, preview_key, preview_url
+    เซ็ตทั้ง out.file.thumb และ out.thumb (ให้ FE ใช้ได้แน่นอน)
     """
-    # --- normalize JSON ---
-    tj = _to_dict(getattr(job, "template_json", None)) or _to_dict(getattr(job, "template", None)) or {}
-    sj = _to_dict(getattr(job, "stats_json", None))    or _to_dict(getattr(job, "stats", None))    or {}
+    _ensure_out_file(out)
+    try:
+        if not getattr(out.file, "thumb", None):
+            out.file.thumb = key
+        if not getattr(out, "thumb", None):
+            setattr(out, "thumb", key)
+    except Exception:
+        pass
 
-    # เวลา (นาที) : job.time_min > stats.time_min > stats.timeMin > stats.duration_min
-    time_min = getattr(job, "time_min", None) or 0
-    if not time_min:
-        tm = _get_from_maps(tj, sj, ["time_min", "timeMin", "duration_min", "durationMin", "print_time_min"])
+
+def _job_to_out(db: Session, current_emp: str, job: PrintJob) -> PrintJobOut:
+    """
+    แปลง ORM → PrintJobOut พร้อมพยายามเติมฟิลด์ json (template/stats/file)
+    - รวม template.settings / settings_json เข้า template แบบ flatten
+    - คำนวณ remaining_min แบบปลอดภัย
+    - เติม name/preview/time_min
+    - ชื่อ (display name) จะอ้างอิงชื่อโฟลเดอร์ใน MinIO เสมอ หากมี gcode_key
+    """
+    out = PrintJobOut.model_validate(job, from_attributes=True)
+
+    # employee_name
+    if not getattr(out, "employee_name", None):
         try:
-            time_min = int(float(tm)) if tm is not None else 0
+            u = db.query(User).filter(User.employee_id == _emp(job.employee_id)).first()
+            out.employee_name = (u.name if u and u.name else _emp(job.employee_id))
         except Exception:
-            time_min = 0
+            out.employee_name = _emp(job.employee_id)
 
-    file_block = _ensure_file_block(job)
+    # map json columns
+    if out.template is None:
+        out.template = (
+            _json_like_to_dict(getattr(job, "template_json", None))
+            or _json_like_to_dict(getattr(job, "template", None))
+        )
+    if out.stats is None:
+        out.stats = (
+            _json_like_to_dict(getattr(job, "stats_json", None))
+            or _json_like_to_dict(getattr(job, "stats", None))
+        )
+    if out.file is None:
+        out.file = (
+            _json_like_to_dict(getattr(job, "file_json", None))
+            or _json_like_to_dict(getattr(job, "file", None))
+        )
 
-    # ชื่อแสดงผล: template.name > file.name > จาก gcode_key > id
-    display_name = _get_from_maps(tj, sj, ["name", "part_name", "title"])
-    if not display_name:
-        display_name = _pick(file_block.get("name"))
-    if not display_name and file_block.get("gcode_key"):
-        display_name = _derive_name_from_key(file_block["gcode_key"])
-    if not display_name:
-        display_name = str(getattr(job, "id", ""))
+    # รวม settings เข้า template
+    try:
+        settings_col = (
+            _json_like_to_dict(getattr(job, "settings_json", None))
+            or _json_like_to_dict(getattr(job, "settings", None))
+        )
+        template_settings_nested = None
+        if isinstance(out.template, dict):
+            template_settings_nested = _json_like_to_dict(out.template.get("settings"))
 
-    # layer / walls / infill (รองรับหลายชื่อ)
-    layer = _get_from_maps(tj, sj, ["layer", "layer_height", "layerHeight", "layer_mm"])
-    walls = _get_from_maps(tj, sj, ["walls", "wall_count", "perimeters", "shells"])
-    infill = _get_from_maps(tj, sj, ["infill", "infill_percent", "infillPercent", "infill_density", "infillDensity"])
+        merged_template = _merge_template_with_settings(out.template, settings_col)
+        merged_template = _merge_template_with_settings(merged_template, template_settings_nested)
+        out.template = merged_template
+    except Exception:
+        pass
 
-    template_out = {
-        "name": display_name,
-        "layer": layer,
-        "walls": walls,
-        "infill": infill,
-    }
-    stats_out = {"time_min": int(time_min or 0)}
+    # time_min จาก stats ถ้าหลักยังว่าง
+    try:
+        if getattr(out, "time_min", None) is None:
+            if isinstance(out.stats, dict):
+                tm = out.stats.get("time_min") or out.stats.get("timeMin")
+                if tm is not None:
+                    out.time_min = int(tm)
+            elif out.stats and hasattr(out.stats, "time_min") and out.stats.time_min is not None:
+                out.time_min = int(out.stats.time_min)
+    except Exception:
+        pass
 
-    # ✅ ส่ง field ที่ FE ใช้ที่ระดับบนสุดด้วย
-    return {
-        "id": getattr(job, "id", None),
-        "status": getattr(job, "status", None) or "completed",
-        "time_min": stats_out["time_min"],
-        "employee_name": employee_name,
-        "uploaded_at": getattr(job, "uploaded_at", None).isoformat() if getattr(job, "uploaded_at", None) else None,
-        "finished_at": getattr(job, "finished_at", None).isoformat() if getattr(job, "finished_at", None) else None,
+    # keys
+    raw_gkey = getattr(job, "gcode_key", None) or getattr(job, "gcode_path", None)
+    gkey = _normalize_brand_case(raw_gkey) if raw_gkey else None
+    key = gkey or ""
 
-        "display_name": display_name,
-        "preview_key": file_block.get("preview_key"),
-        "preview_url": file_block.get("preview_url"),
+    # ------------------------------
+    # ชื่อแสดงผล (Display Name)
+    # ------------------------------
+    try:
+        name_is_missing_or_bad = (not out.name) or (isinstance(out.name, str) and out.name.lower().endswith(".stl"))
 
-        "template": template_out,
-        "stats": stats_out,
-        "file": file_block,
-    }
+        # ใช้ชื่อโฟลเดอร์ใน MinIO เสมอ หากมี gcode_key อยู่ใต้ catalog/* หรือ storage/*
+        if gkey and (gkey.startswith("catalog/") or gkey.startswith("storage/")):
+            folder = _folder_name_from_key(gkey)
+            if folder:
+                out.name = folder
+                name_is_missing_or_bad = False
 
+        # ถ้ายังไม่มีชื่อ และเป็น gcode → ใช้ชื่อไฟล์ (ตัด _oriented/_preview/_thumb)
+        if name_is_missing_or_bad and _is_gcode_key(key):
+            base = os.path.basename(key)
+            root, _ = os.path.splitext(base)
+            for sfx in ("_oriented", "_preview", "_thumb"):
+                root = root.replace(sfx, "")
+            out.name = root or base
+    except Exception:
+        pass
+
+    # ------------------------------
+    # Preview (thumb): ตรวจเช็คไฟล์จริงใน S3
+    # ------------------------------
+    try:
+        from s3util import head_object
+
+        _ensure_out_file(out)
+
+        # ถ้ายังไม่มีค่าอยู่แล้ว ค่อยไล่หา
+        existing = getattr(out.file, "thumb", None) or getattr(out.file, "preview_key", None)
+        if not existing:
+            candidates: List[str] = []
+
+            # 1) เดาจาก gcode_key (แม่นสุด)
+            if _is_gcode_key(gkey):
+                dir_, base = os.path.split(gkey)
+                root, _ = os.path.splitext(base)
+                candidates = _preview_candidates(dir_, root)
+
+            # 2) ถ้ายังไม่มี หรือ gcode_key ไม่มี → เดาจากชื่อชิ้นงาน
+            if not candidates:
+                candidates = _preview_candidates_from_name(out.name)
+
+            found = None
+            for cand in candidates:
+                try:
+                    head_object(cand)  # 200 OK -> มีไฟล์
+                    found = cand
+                    break
+                except Exception:
+                    continue
+
+            if found:
+                # เซ็ตให้ FE อ่านได้ทั้งสองแบบ
+                if not getattr(out.file, "thumb", None):
+                    out.file.thumb = found
+                # บาง FE ใช้ชื่อ preview_key
+                if not getattr(out.file, "preview_key", None):
+                    setattr(out.file, "preview_key", found)
+    except Exception:
+        # อย่าทำให้ล่มเพราะหา preview ไม่เจอ
+        pass
+
+
+    # remaining_min
+    try:
+        if job.status == "processing" and job.started_at and (job.time_min or 0) > 0:
+            elapsed = max(0, int((datetime.utcnow() - job.started_at).total_seconds() // 60))
+            out.remaining_min = max((job.time_min or 0) - elapsed, 0)
+        elif job.status in {"queued", "paused"}:
+            out.remaining_min = job.time_min or 0
+    except Exception:
+        pass
+
+    # cancel permission
+    out.me_can_cancel = bool((job.employee_id == current_emp) and (job.status in ("queued", "paused")))
+
+    return out
+
+def _normalize_brand_case(key: Optional[str]) -> Optional[str]:
+    if not key:
+        return key
+    k = key.lstrip("/")
+    k = k.replace("catalog/HONTECH/", "catalog/Hontech/")
+    k = k.replace("catalog/DELTA/",   "catalog/Delta/")
+    k = k.replace("storage/HONTECH/", "storage/Hontech/")
+    k = k.replace("storage/DELTA/",   "storage/Delta/")
+    return k
+
+def _preview_candidates_from_name(name: Optional[str]) -> List[str]:
+    if not name:
+        return []
+    brands = ["Hontech", "Delta"]
+    bases = [name, name.replace("_oriented", ""), name.replace("_oriented", "") + "_oriented"]
+    exts  = ["png", "jpg", "jpeg"]
+    patterns = [
+        "{b}.preview.{e}",
+        "{b}_preview.{e}",
+        "{b}_oriented_preview.{e}",
+        "{b}_thumb.{e}",
+    ]
+    out: List[str] = []
+    for br in brands:
+        dir_ = f"catalog/{br}/{name}"
+        for b in bases:
+            for e in exts:
+                for p in patterns:
+                    out.append(f"{dir_}/{p.format(b=b, e=e)}")
+    # unique
+    seen, uniq = set(), []
+    for k in out:
+        if k not in seen:
+            uniq.append(k); seen.add(k)
+    return uniq
 
 # -------------------------------------------------------------------
-# GET /history/my (+ /my/count)
+# GET /history/my
 # -------------------------------------------------------------------
-@router.get("/my")
+
+@router.get("/my", response_model=List[PrintJobOut])
 def list_my_history(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
     limit: int = Query(200, ge=1, le=1000),
-    include_processing: bool = Query(
-        False,
-        description="true เพื่อรวม queued/paused/processing",
-    ),
-    since: Optional[datetime] = Query(None, description="กรองตั้งแต่เวลานี้ (uploaded_at/finished_at >= since)"),
+    q: Optional[str] = Query(None, description="ค้นหาชื่อไฟล์/งาน (case-insensitive)"),
 ):
+    """
+    แสดงเฉพาะประวัติการพิมพ์จริง (upload / storage)
+    ไม่รวม octoprint ที่เป็น internal job
+    """
     emp = _emp(current.employee_id)
-    q = db.query(PrintJob).filter(PrintJob.employee_id == emp)
+    qry = (
+        db.query(PrintJob)
+        .filter(
+            PrintJob.employee_id == emp,
+            PrintJob.source.in_(["upload", "storage"]),
+            PrintJob.status.in_(["completed", "failed", "canceled"]),
+        )
+    )
 
-    statuses = ("completed", "failed", "canceled")
-    if include_processing:
-        statuses = ("completed", "failed", "canceled", "queued", "paused", "processing")
-    q = q.filter(PrintJob.status.in_(statuses))
-
-    if since:
-        q = q.filter((PrintJob.uploaded_at >= since) | (PrintJob.finished_at >= since))  # type: ignore[operator]
-
-    rows = q.order_by(PrintJob.uploaded_at.desc(), PrintJob.id.desc()).limit(limit).all()
-
-    items: List[dict] = []
-    emp_name = current.name or emp
-    for j in rows:
+    if q and q.strip():
+        text = f"%{q.strip()}%"
         try:
-            items.append(_client_job_dict(j, emp_name))
-        except Exception as e:
-            log.exception("history/_client_job_dict failed id=%s: %s", getattr(j, "id", "?"), e)
+            qry = qry.filter(PrintJob.name.ilike(text))
+        except Exception:
+            qry = qry.filter(func.lower(PrintJob.name).like(text.lower()))
 
-    return jsonable_encoder(items, exclude_none=True)
+    rows = (
+        qry.order_by(PrintJob.uploaded_at.desc(), PrintJob.id.desc())
+        .limit(limit)
+        .all()
+    )
 
-
-@router.get("/my/count")
-def count_my_history(
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user),
-    include_processing: bool = Query(False),
-    since: Optional[datetime] = Query(None),
-):
-    emp = _emp(current.employee_id)
-    q = db.query(PrintJob).filter(PrintJob.employee_id == emp)
-
-    statuses = ("completed", "failed", "canceled")
-    if include_processing:
-        statuses = ("completed", "failed", "canceled", "queued", "paused", "processing")
-    q = q.filter(PrintJob.status.in_(statuses))
-
-    if since:
-        q = q.filter((PrintJob.uploaded_at >= since) | (PrintJob.finished_at >= since))  # type: ignore[operator]
-
-    return {"count": q.count()}
+    return [_job_to_out(db, emp, j) for j in rows]
 
 
 # -------------------------------------------------------------------
-# DELETE endpoints
+# DELETE /history/{job_id}
 # -------------------------------------------------------------------
+
 @router.delete("/{job_id}")
 def delete_my_job(
     job_id: int,
@@ -299,6 +388,10 @@ def delete_my_job(
     return {"ok": True, "deleted_id": job_id}
 
 
+# -------------------------------------------------------------------
+# DELETE /history (bulk)
+# -------------------------------------------------------------------
+
 @router.delete("")
 def delete_my_history_bulk(
     older_than_days: Optional[int] = Query(
@@ -310,16 +403,16 @@ def delete_my_history_bulk(
     current: User = Depends(get_current_user),
 ):
     emp = _emp(current.employee_id)
-    q = db.query(PrintJob).filter(
+    qry = db.query(PrintJob).filter(
         PrintJob.employee_id == emp,
         PrintJob.status.in_(("completed", "failed", "canceled")),
     )
 
     if older_than_days is not None:
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
-        q = q.filter((PrintJob.finished_at == None) | (PrintJob.finished_at < cutoff))  # noqa: E711
+        qry = qry.filter((PrintJob.finished_at == None) | (PrintJob.finished_at < cutoff))  # noqa: E711
 
-    to_delete = q.all()
+    to_delete = qry.all()
     for row in to_delete:
         db.delete(row)
     db.commit()
@@ -328,20 +421,18 @@ def delete_my_history_bulk(
 
 
 # -------------------------------------------------------------------
-# POST /history/merge (optional: import client-side records for storage files)
+# POST /history/merge — ensure storage_files idempotent
 # -------------------------------------------------------------------
+
 class HistoryItemIn(BaseModel):
     gcode_key: Optional[str] = None
     gcode_path: Optional[str] = None
     original_key: Optional[str] = None
-
     name: Optional[str] = None
     uploadedAt: Optional[datetime] = None
-
     template: Optional[Dict[str, Any]] = None
     stats: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
-
     model_config = ConfigDict(extra="allow")
 
 
@@ -358,7 +449,7 @@ class HistoryMergeOut(BaseModel):
 
 @router.post("/merge", response_model=HistoryMergeOut)
 def merge_from_client(
-    payload: HistoryMergeIn = Body(..., description="items จาก FE เพื่อ ensure storage_files"),
+    payload: HistoryMergeIn = Body(..., description="items ที่ฝั่ง FE export/migrate ขึ้นมา"),
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
@@ -372,8 +463,10 @@ def merge_from_client(
 
     for it in items:
         try:
-            # priority: gcode_key > original_key
-            for candidate in ((it.gcode_key or "").strip(), (it.original_key or "").strip()):
+            gk = (it.gcode_key or "").strip()
+            ok = (it.original_key or "").strip()
+
+            for candidate in (gk, ok):
                 if candidate and candidate.startswith("storage/"):
                     considered += 1
                     filename_hint = (it.name or (it.file or {}).get("name") or candidate).strip() or candidate
@@ -382,6 +475,7 @@ def merge_from_client(
                     break
         except Exception as e:
             log.warning("merge item failed: %s", e, exc_info=False)
+            continue
 
     db.commit()
     return HistoryMergeOut(ok=True, imported=len(items), stored_records=stored, considered=considered)

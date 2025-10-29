@@ -1,6 +1,7 @@
 # backend/models.py
 from __future__ import annotations
 
+import os
 import json
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -17,9 +18,10 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     CheckConstraint,
-    event,  # NEW
+    event,
+    literal,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, column_property
 
 from db import Base
 
@@ -168,6 +170,9 @@ class Printer(Base):
 
 # ===================== Print Queue / Jobs ======================
 
+# เปิด Legacy mode: ไม่ใช้คอลัมน์ gcode_key/template_json/stats_json/file_json ใน DB
+LEGACY_DB = os.getenv("LEGACY_DB", "1") == "1"
+
 class PrintJob(Base):
     """
     งานพิมพ์หนึ่งรายการในคิวของเครื่อง
@@ -218,15 +223,21 @@ class PrintJob(Base):
     octoprint_job_id = Column(String, nullable=True)  # ไอดีงานใน OctoPrint (ถ้ามี)
     gcode_path = Column(String, nullable=True)        # ที่อยู่ไฟล์บน storage (ถ้ามี)
 
-    # ✅ object_key ของไฟล์ G-code ใน storage
-    gcode_key = Column(String(512), nullable=True, index=True)
+    # ===== Legacy switch: ถ้าไม่ใช้คอลัมน์ใหม่ ให้เป็นค่าคงที่ None =====
+    if LEGACY_DB:
+        # ไม่มีคอลัมน์ใน DB → ไม่แตะตารางเดิม
+        gcode_key     = column_property(literal(None))
+        template_json = column_property(literal(None))
+        stats_json    = column_property(literal(None))
+        file_json     = column_property(literal(None))
+    else:
+        # ถ้าอนาคตจะใช้งานจริง ให้สลับเป็น Column ได้เลย
+        gcode_key     = Column(String(512), nullable=True, index=True)
+        template_json = Column(Text, nullable=True)
+        stats_json    = Column(Text, nullable=True)
+        file_json     = Column(Text, nullable=True)
 
-    # ✅ เก็บพารามิเตอร์และสถิติการพิมพ์ (JSON string)
-    template_json = Column(Text, nullable=True)       # เช่น printer/material/nozzle/layer/infill/...
-    stats_json = Column(Text, nullable=True)          # เช่น filament_g / time_min / time_text / source
-    file_json = Column(Text, nullable=True)           # ชื่อไฟล์/ขนาด/ฯลฯ ตอนอัปโหลด
-
-    # ความสัมพันธ์
+    # ความสัมพันธ์หลัก
     printer = relationship("Printer", back_populates="jobs")
     owner = relationship(
         "User",
@@ -234,8 +245,6 @@ class PrintJob(Base):
         viewonly=True,
         lazy="noload",
     )
-
-    # (ออปชัน) ความสัมพันธ์ไปยัง "ผู้กดพิมพ์" เพื่ออ้างอิงชื่อ/อีเมลได้ง่าย
     requester = relationship(
         "User",
         primaryjoin="foreign(PrintJob.requested_by_employee_id)==User.employee_id",
@@ -243,13 +252,19 @@ class PrintJob(Base):
         lazy="noload",
     )
 
-    # view-only reference ไปที่ StorageFile โดยเทียบ object_key (ไม่มี FK จริง)
-    storage_ref = relationship(
-        "StorageFile",
-        primaryjoin="foreign(PrintJob.gcode_key)==StorageFile.object_key",
-        viewonly=True,
-        lazy="noload",
-    )
+    # ------ storage_ref: ปิด relationship เมื่อ LEGACY_DB เป็น True ------
+    if LEGACY_DB:
+        @property
+        def storage_ref(self):
+            # ไม่มี gcode_key จริง → ไม่ผูก StorageFile
+            return None
+    else:
+        storage_ref = relationship(
+            "StorageFile",
+            primaryjoin="foreign(PrintJob.gcode_key)==StorageFile.object_key",
+            viewonly=True,
+            lazy="noload",
+        )
 
     # ---------- convenience JSON accessors ----------
     @property
