@@ -276,12 +276,16 @@ def health():
 from fastapi.responses import RedirectResponse
 
 @app.get("/storage/{path:path}")
-def compat_storage_redirect(path: str):
-    return RedirectResponse(url=f"/api/storage/{path}", status_code=308)
+def compat_storage_redirect(path: str, request: Request):
+    qs = request.url.query
+    url = f"/api/storage/{path}" + (f"?{qs}" if qs else "")
+    return RedirectResponse(url=url, status_code=308)
 
 @app.get("/files/{path:path}")
-def compat_files_redirect(path: str):
-    return RedirectResponse(url=f"/api/files/{path}", status_code=308)
+def compat_files_redirect(path: str, request: Request):
+    qs = request.url.query
+    url = f"/api/files/{path}" + (f"?{qs}" if qs else "")
+    return RedirectResponse(url=url, status_code=308)
 
 @app.get("/")
 def root():

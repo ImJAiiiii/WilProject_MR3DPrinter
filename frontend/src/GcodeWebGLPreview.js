@@ -48,7 +48,7 @@ async function fetchGcodeText({ apiBase, objectKey, token }) {
   const dec = new TextDecoder("utf-8");
   let offset = 0, total = Infinity, out = "", lastSig = "", same = 0;
   for (let i = 0; i < 256 && out.length < MAX_BYTES && offset < total; i++) {
-    const url = new URL(`${apiBase}/storage/range`);
+    const url = new URL(`${apiBase}/api/storage/range`);
     url.searchParams.set("object_key", objectKey);
     url.searchParams.set("start", String(offset));
     url.searchParams.set("length", String(RANGE_CHUNK));

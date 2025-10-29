@@ -16,6 +16,7 @@ export default function PrintProgress({
   state = "printing",
   elapsedSecondsInit = 0,
   nowProvider,
+  progressPct,
 }) {
   const [elapsed, setElapsed] = useState(elapsedSecondsInit);
   const tickingRef = useRef(null);
@@ -44,8 +45,11 @@ export default function PrintProgress({
 
   const clampedElapsed = state === "completed" ? total : Math.min(elapsed, total);
   const remaining = Math.max(0, total - clampedElapsed);
-  const percent = total > 0 ? (clampedElapsed / total) * 100 : 0;
-
+  const computedPct = total > 0 ? (clampedElapsed / total) * 100 : 0;
+  const percent =
+    typeof progressPct === "number" && isFinite(progressPct)
+      ? Math.max(0, Math.min(100, progressPct))
+      : computedPct;
   const fmt = (sec) => {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);

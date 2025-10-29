@@ -88,29 +88,27 @@ export default function PrintControls({
   const pausedLike = String(state || "").toLowerCase().includes("pause");
 
   const handlePause = async () => {
-    try {
-      setMessage(null);
-      setIsPausing(true);
-      const body =
-        pausedLike
-          ? { command: "pause", action: "resume" }
-          : { command: "pause", action: "pause" };
-      await apiPost(`/printers/${encodeURIComponent(printerId)}/octoprint/command`, body);
-      setMessage(pausedLike ? "Resumed" : "Paused");
-      onAfterAction?.("pause");
-    } catch (e) {
-      console.error(e);
-      setMessage(`Failed: ${e.message || e}`);
-      // กันพลาด: ลองใช้ wrapper สั้นๆ ถ้าตัวบนไม่อยู่
-      try {
-        await apiPost(`/printers/${encodeURIComponent(printerId)}/${pausedLike ? "pause" : "pause"}`);
-      } catch {}
-    } finally {
-      setIsPausing(false);
-      // เคลียร์ข้อความหลัง 3 วิ
-      setTimeout(() => setMessage(null), 3000);
-    }
-  };
+  try {
+    setMessage(null);
+    setIsPausing(true);
+
+    // ✅ ใช้ toggle ตลอด → ถ้ากำลังพิมพ์จะ Pause, ถ้ากำลัง Paused จะ Resume
+    await apiPost(`/printers/${encodeURIComponent(printerId)}/octoprint/command`, {
+      command: "pause",
+      action: "toggle",
+    });
+
+    // แค่ข้อความบอกผู้ใช้ (อิงจาก label เดิมที่เราคาดไว้)
+    setMessage(pausedLike ? "Resumed" : "Paused");
+    onAfterAction?.("pause");
+  } catch (e) {
+    console.error(e);
+    setMessage(`Failed: ${e.message || e}`);
+  } finally {
+    setIsPausing(false);
+    setTimeout(() => setMessage(null), 3000);
+  }
+};
 
   const handleCancelClick = () => setShowConfirm(true);
 

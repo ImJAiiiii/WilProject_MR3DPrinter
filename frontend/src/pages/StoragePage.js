@@ -51,7 +51,7 @@ function withToken(u, tkn) {
   catch { const sep = u.includes("?") ? "&" : "?"; return `${u}${sep}token=${encodeURIComponent(tkn)}`; }
 }
 function toRawUrl(apiBase, objectKey, token) {
-  const path = `/files/raw?object_key=${encodeURIComponent(objectKey)}`;
+  const path = `/api/files/raw?object_key=${encodeURIComponent(objectKey)}`;
   return withToken(joinUrl(apiBase, path), token);
 }
 

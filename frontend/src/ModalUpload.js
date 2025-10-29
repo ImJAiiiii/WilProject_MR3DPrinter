@@ -511,7 +511,11 @@ export default function ModalUpload({
       }
 
       const materialMaybe = !isGcode ? material : undefined;
-
+      try {
+        await api.post("/api/storage/preview/regenerate", null, { object_key: finalGcodeKey });
+      } catch (e) {
+        console.warn("preview regenerate failed:", e);
+      }
       const printPayload = {
         ...payloadFromPreview,
         source: 'upload',

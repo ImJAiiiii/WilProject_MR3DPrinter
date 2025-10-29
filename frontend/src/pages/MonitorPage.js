@@ -162,6 +162,16 @@ export default function MonitorPage({
         // payload: { octoprint: { job, progress }, ... }
         const job = data?.octoprint?.job || {};
         const progress = data?.octoprint?.progress || {};
+        const stateText = String(data?.octoprint?.state || "");
+        const mapped = normalizeState(stateText);
+        setPrintState(mapped);
+        setPrinterOnline(true);
+        setPrinterStatus(
+          mapped === "paused"   ? "Paused" :
+          mapped === "printing" ? "Printing..." :
+          mapped === "ready"    ? "Printer is ready" :
+        "Offline — waiting for connection"
+        );
         const fileName = job?.file?.name || null;
 
         // เดา material จาก OctoPrint (ถ้า plugin/โครงสร้างรองรับ)
