@@ -342,3 +342,84 @@
   outline:2px solid rgba(11,94,207,.35);
   outline-offset:2px;
 }
+/* RightPanel.css – ส่วนของ Material popover */
+.material-card { position: relative; }            /* กัน popover หลุดเลเยอร์ */
+.mat-trigger { display: none; }
+.mat-dot{width:28px;height:28px;border-radius:50%;border:1.5px solid #D1D5DB}
+.mat-text{font-weight:800;letter-spacing:.3px}
+.mat-popover{
+  position: fixed;            /* สำคัญ: fixed ไม่ใช่ absolute */
+  width: 280px;               /* ให้ JS วัดจริงได้ แต่กำหนดกว้างหลักไว้ */
+  padding: 16px 18px;
+  background:#fff;
+  border:2px solid #80b5ff;
+  border-radius:14px;
+  box-shadow:0 12px 30px rgba(16,24,40,.18);
+  z-index:1000;
+}
+
+.mat-popover.is-bottom::before,
+.mat-popover.is-bottom::after,
+.mat-popover.is-top::before,
+.mat-popover.is-top::after{
+  content:"";
+  position:absolute;
+  left: var(--arrow-x, 40px);   /* รับจาก JS */
+  transform: translateX(-50%);
+  border-style: solid;
+  pointer-events:none;
+}
+
+.mat-popover.is-bottom::before{ top:-8px;  border-width:0 8px 8px 8px; border-color:transparent transparent #80b5ff transparent; }
+.mat-popover.is-bottom::after { top:-6px;  border-width:0 7px 7px 7px; border-color:transparent transparent #fff     transparent; }
+.mat-popover.is-top::before   { bottom:-8px;border-width:8px 8px 0 8px; border-color:#80b5ff transparent transparent transparent; }
+.mat-popover.is-top::after    { bottom:-6px;border-width:7px 7px 0 7px; border-color:#fff     transparent transparent transparent; }
+
+.mat-type-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 22px;margin-bottom:10px}
+.mat-type{padding:8px 12px;border:1.5px solid #b9d3ff;border-radius:12px;background:#fff;font-weight:800;letter-spacing:.5px;cursor:pointer}
+.mat-type.is-active{background:#eef5ff;border-color:#5aa2ff;box-shadow:0 0 0 2px rgba(0,94,255,.12) inset}
+.mat-divider{height:2px;background:#cfe2ff;margin:8px 0 14px}
+.mat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px 16px}
+.mat-swatch{width:34px;height:34px;border-radius:50%;border:1.5px solid #D1D5DB;cursor:pointer}
+.mat-swatch.is-selected{outline:3px solid rgba(0,94,255,.25);outline-offset:2px;border-color:#5aa2ff}
+/* วงกลมใหญ่สำหรับปุ่ม Material (กดเพื่อเปิด popover) */
+.mat-circle{
+  width: 120px;              /* ปรับขนาดได้ */
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid #cfe2ff;
+  box-shadow: 0 8px 24px rgba(16,24,40,.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  letter-spacing: .6px;
+  font-size: 20px;
+  cursor: pointer;
+  user-select: none;
+  margin: 8px auto 0;        /* ให้อยู่กึ่งกลางการ์ด */
+  transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease;
+}
+
+.mat-circle:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(16,24,40,.18);
+  border-color: #9cc4ff;
+}
+
+.mat-circle:active{
+  transform: translateY(0);
+  box-shadow: 0 6px 18px rgba(16,24,40,.16);
+}
+
+.mat-circle:focus-visible{
+  outline: 0;
+  box-shadow:
+    0 10px 28px rgba(16,24,40,.18),
+    0 0 0 3px rgba(0,94,255,.25);
+}
+
+/* จอแคบให้เล็กลงนิด */
+@media (max-width: 640px){
+  .mat-circle{ width: 96px; height: 96px; font-size: 18px; }
+}

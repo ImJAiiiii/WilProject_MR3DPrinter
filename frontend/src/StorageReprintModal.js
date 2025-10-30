@@ -185,7 +185,7 @@ const mapManifest = (man = {}) => {
   return { template, stats, keys };
 };
 
-/* ---- URL helpers (encodeURIComponent ครบ) ---- */
+/* ---- URL helpers ---- */
 function joinUrl(base, path) {
   try {
     const b = String(base || "").trim();
@@ -204,7 +204,7 @@ function toRawUrl(apiBase, objectKey, token) {
   return withToken(joinUrl(apiBase, path), token);
 }
 
-/* ---- Preview candidate: .png → .jpg → .jpeg (space และ +) ---- */
+/* ---- Preview candidate ---- */
 function derivePreviewCandidatesFromKey(keyWithExt) {
   if (!keyWithExt) return [];
   const dot = keyWithExt.lastIndexOf(".");
@@ -242,6 +242,9 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
   const [manifest, setManifest] = useState(null);
   const [manLoaded, setManLoaded] = useState(false);
   const [gramsFromGcode, setGramsFromGcode] = useState(null);
+
+  // 🔒 กันยิงซ้ำแบบ synchronous
+  const lockRef = useRef(false);
   const lastEnterAtRef = useRef(0);
 
   /* reset on open/file change */
@@ -250,6 +253,7 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
     setManLoaded(false);
     setErr("");
     setGramsFromGcode(null);
+    lockRef.current = false; // reset lock เมื่อ modal เปิดใหม่
   }, [open, file]);
 
   /* ---- load manifest lazily ---- */
@@ -381,27 +385,22 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
   const uploadedDisplay = f.uploadedAt || fmtDateTime(f.uploadedTs) || "-";
   const sizeDisplay = f.sizeText || (Number.isFinite(f.size) ? fmtBytes(f.size) : "-");
 
-  // ---- Build preview URL (เข้ารหัส object_key อย่างถูกต้อง) ----
+  // ---- Build preview URL ----
   const previewSrc = useMemo(() => {
-    // 1) จาก manifest
     const manPreview = manMapped?.keys?.preview_key;
     if (manPreview) return toRawUrl(api.API_BASE, manPreview, token);
 
-    // 2) จาก thumb (key หรือ URL)
     if (typeof f.thumb === "string") {
       if (/^https?:\/\//i.test(f.thumb) || f.thumb.startsWith("data:")) return f.thumb;
       return toRawUrl(api.API_BASE, f.thumb, token);
     }
 
-    // 3) เดาจาก gcode/object key → candidate แรก (ถ้า 404 onError จะ fallback)
     const keyBase =
       f.gcode_key || f.object_key || f._raw?.object_key || f.file?.object_key || (manMapped?.keys?.gcode_key) || "";
     if (keyBase) {
       const cand = derivePreviewCandidatesFromKey(keyBase)[0];
       if (cand) return toRawUrl(api.API_BASE, cand, token);
     }
-
-    // 4) ไม่มี → data URI
     return FALLBACK_ICON;
   }, [api.API_BASE, token, f.thumb, f.gcode_key, f.object_key, f._raw, f.file, manMapped]);
 
@@ -413,7 +412,10 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
 
   /* ---- submit ---- */
   const submit = useCallback(async () => {
-    if (!isReady || submitting) return;
+    // เช็คทั้ง isReady, submitting และ lockRef (กันดับเบิลคลิก/Enter)
+    if (!isReady || submitting || lockRef.current) return;
+    lockRef.current = true;
+
     setErr("");
     setSubmitting(true);
     try {
@@ -452,6 +454,8 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
       setErr(e?.message || "Failed to reprint.");
     } finally {
       setSubmitting(false);
+      // ปลดล็อกหลังจบเฟรม (delay เล็กน้อยกัน event ซ้อน)
+      setTimeout(() => { lockRef.current = false; }, 300);
     }
   }, [
     api, estimate.minutes, f.name, f.original_key, gcodeKey, gramsDisplay, idemKey,
@@ -471,7 +475,7 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
         if (now - lastEnterAtRef.current < 1200) return;
         lastEnterAtRef.current = now;
         e.preventDefault();
-        if (!submitting) submit();
+        if (!submitting && !lockRef.current) submit();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -547,11 +551,12 @@ export default function StorageReprintModal({ open, file, onClose, onPrint }) {
         <div className="rp-actions">
           <button className="rp-btn rp-btn--ghost" onClick={onClose} disabled={submitting}>Close</button>
           <button
-            className="rp-btn rp-cta"
+            className={`rp-btn rp-cta${submitting ? " is-busy" : ""}`}
             onClick={submit}
             disabled={!isReady || submitting}
             aria-busy={submitting ? "true" : "false"}
             title={!isReady ? "This item is not a valid G-code or missing key" : "Print again"}
+            type="button"
           >
             {submitting ? "Queuing..." : "Print again"}
           </button>

@@ -583,6 +583,30 @@ def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id
     return _to_out(db, current, job)
 
 # ---------------------------------------------------------------------------
+# duplicate guard helpers
+# ---------------------------------------------------------------------------
+
+def _find_recent_duplicate(db: Session, *, employee_id: str, printer_id: str, gcode_path: str, window_sec: int) -> Optional[PrintJob]:
+    """
+    มองหางาน 'queued' ที่เพิ่งสร้าง (ภายใน window_sec) ของคนเดิม + เครื่องเดิม + gcode เดิม
+    """
+    if not (employee_id and printer_id and gcode_path):
+        return None
+    since = datetime.utcnow() - timedelta(seconds=window_sec)
+    return (
+        db.query(PrintJob)
+          .filter(
+              PrintJob.employee_id == _emp(employee_id),
+              PrintJob.printer_id == _norm_printer_id(printer_id),
+              PrintJob.status == "queued",
+              PrintJob.uploaded_at >= since,
+              PrintJob.gcode_path == gcode_path,
+          )
+          .order_by(PrintJob.uploaded_at.desc(), PrintJob.id.desc())
+          .first()
+    )
+
+# ---------------------------------------------------------------------------
 # create
 # ---------------------------------------------------------------------------
 
@@ -593,8 +617,23 @@ def create_print(
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
     background_tasks: BackgroundTasks = None,
+    idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     pid = _norm_printer_id(printer_id or DEFAULT_PRINTER_ID)
+
+    # ---- duplicate guard (120s ถ้ามี Idempotency-Key, ไม่งั้น 60s) ----
+    gpath = (payload.gcode_path or payload.gcode_key or "").strip()
+    if gpath:
+        win = 3
+        dup = _find_recent_duplicate(db,
+            employee_id=_emp(current.employee_id),
+            printer_id=pid,
+            gcode_path=gpath,
+            window_sec=win,
+        )
+        if dup:
+            return _to_out(db, current, dup)
+
     return _enqueue_job(db, current, payload, pid, background_tasks)
 
 @router.post("/printers/{printer_id}/queue", response_model=PrintJobOut)
@@ -604,8 +643,22 @@ def enqueue_for_printer(
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
     background_tasks: BackgroundTasks = None,
+    idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     pid = _norm_printer_id(printer_id)
+
+    gpath = (payload.gcode_path or payload.gcode_key or "").strip()
+    if gpath:
+        win = 3
+        dup = _find_recent_duplicate(db,
+            employee_id=_emp(current.employee_id),
+            printer_id=pid,
+            gcode_path=gpath,
+            window_sec=win,
+        )
+        if dup:
+            return _to_out(db, current, dup)
+
     return _enqueue_job(db, current, payload, pid, background_tasks)
 
 # ---------------------------------------------------------------------------

@@ -1,21 +1,50 @@
 // src/RightPanel.js
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useLayoutEffect,
+} from "react";
 import "./RightPanel.css";
 import { useApi } from "./api";
 
-const DEFAULTS = { nozzle: 220, bed: 65, feed: 100 }; // ค่าเริ่มต้นทั่วไป (PLA)
-const MIN_FEED = 10;
-const MAX_FEED = 200;
+const DEFAULTS = { nozzle: 220, bed: 65, feed: 100 };
+const MIN_FEED = 10,
+  MAX_FEED = 200;
 
-// สีคร่าว ๆ ตามชนิดวัสดุ
-const MATERIAL_COLORS = {
-  PLA: "#4caf50",
-  PETG: "#2196f3",
-  ABS: "#ff9800",
-  ASA: "#9c27b0",
-  TPU: "#009688",
-  DEFAULT: "#9e9e9e",
-};
+// ---------- Material options ----------
+const MATERIAL_TYPES = ["PLA", "ABS", "PETG", "ASA", "TPU"];
+const MATERIAL_SWATCHES = [
+  { name: "White", hex: "#FFFFFF", text: "#111" },
+  { name: "Black", hex: "#111111", text: "#fff" },
+  { name: "Gray", hex: "#BDBDBD", text: "#111" },
+  { name: "Red", hex: "#E53935", text: "#fff" },
+  { name: "Orange", hex: "#FB8C00", text: "#111" },
+  { name: "Yellow", hex: "#FDD835", text: "#111" },
+  { name: "Green", hex: "#43A047", text: "#fff" },
+  { name: "Blue", hex: "#1E88E5", text: "#fff" },
+  { name: "Purple", hex: "#8E24AA", text: "#fff" },
+  { name: "Pink", hex: "#EC407A", text: "#fff" },
+  { name: "Brown", hex: "#6D4C41", text: "#fff" },
+  { name: "Beige", hex: "#EED9C4", text: "#111" },
+];
+
+// ---------- small helper ----------
+function useClickOutside(ref, onClose) {
+  useEffect(() => {
+    const h = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose?.();
+    };
+    document.addEventListener("mousedown", h);
+    document.addEventListener("touchstart", h);
+    return () => {
+      document.removeEventListener("mousedown", h);
+      document.removeEventListener("touchstart", h);
+    };
+  }, [ref, onClose]);
+}
 
 /* ================= Temperature Modal ================ */
 function TemperatureModal({
@@ -140,25 +169,160 @@ function TemperatureModal({
 export default function RightPanel({
   printerId,
   remainingTime: externalRemainingTime,
-  material: externalMaterial,
 }) {
   const api = useApi();
 
-  // อุณหภูมิ
+  // Temps
   const [nozzleActual, setNozzleActual] = useState(DEFAULTS.nozzle);
   const [nozzleTarget, setNozzleTarget] = useState(DEFAULTS.nozzle);
   const [bedActual, setBedActual] = useState(DEFAULTS.bed);
   const [bedTarget, setBedTarget] = useState(DEFAULTS.bed);
 
-  // ความเร็ว
+  // Speed
   const [feedrate, setFeedrate] = useState(DEFAULTS.feed);
   const [speedBusy, setSpeedBusy] = useState(false);
 
-  // Modal
+  // Temp modal
   const [activeModal, setActiveModal] = useState(null); // 'nozzle' | 'bed' | null
   const [draftTemp, setDraftTemp] = useState(0);
   const [modalBusy, setModalBusy] = useState(false);
 
+  // Material popover
+  const [matType, setMatType] = useState("PLA");
+  const [matColor, setMatColor] = useState("#1E88E5");
+  const [matText, setMatText] = useState("#fff");
+  const [matOpen, setMatOpen] = useState(false);
+  const matAnchorRef = useRef(null);
+  const popRef = useRef(null);
+  const [matPos, setMatPos] = useState({
+    top: 0,
+    left: 0,
+    placement: "bottom",
+    arrowX: 40,
+  });
+
+  // ================= Material popover position =================
+  function computeMaterialPopoverPosition(anchorEl, popEl) {
+    const GAP = 8; // space between anchor <-> pop
+    const PAD = 8; // viewport padding
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const ar = anchorEl.getBoundingClientRect();
+    const pw = Math.max(1, popEl.offsetWidth || 280);
+    const ph = Math.max(1, popEl.offsetHeight || 240);
+
+    // start centered with the trigger
+    let left = ar.left + ar.width / 2 - pw / 2;
+    left = Math.max(PAD, Math.min(vw - PAD - pw, left));
+
+    // bottom or top
+    let placement = "bottom";
+    let top = ar.bottom + GAP;
+    const canPlaceBottom = top + ph <= vh - PAD;
+    const canPlaceTop = ar.top - GAP - ph >= PAD;
+
+    if (!canPlaceBottom && canPlaceTop) {
+      top = ar.top - GAP - ph;
+      placement = "top";
+    } else if (!canPlaceBottom && !canPlaceTop) {
+      // extremely tight viewport: clamp inside
+      top = Math.max(PAD, Math.min(vh - PAD - ph, top));
+    }
+
+    // arrow: point to anchor center but clamp inside pop width
+    const anchorCenterX = ar.left + ar.width / 2;
+    let arrowX = anchorCenterX - left;
+    arrowX = Math.max(12, Math.min(pw - 12, arrowX));
+
+    return { top, left, placement, arrowX };
+  }
+
+  useClickOutside(popRef, () => setMatOpen(false));
+
+  useLayoutEffect(() => {
+    if (!matOpen) return;
+    const place = () => {
+      const a = matAnchorRef.current,
+        p = popRef.current;
+      if (!a || !p) return;
+      setMatPos(computeMaterialPopoverPosition(a, p));
+    };
+    // wait 1 frame so DOM has real size
+    const raf = requestAnimationFrame(place);
+
+    const re = () => place();
+    window.addEventListener("resize", re);
+    window.addEventListener("scroll", re, true);
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMatOpen(false);
+        matAnchorRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", re);
+      window.removeEventListener("scroll", re, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [matOpen]);
+
+  // restore saved values
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("printer_setpoints");
+      if (raw) {
+        const sp = JSON.parse(raw);
+        if (Number.isFinite(sp?.nozzle) && sp.nozzle > 0) setNozzleTarget(sp.nozzle);
+        if (Number.isFinite(sp?.bed) && sp.bed > 0) setBedTarget(sp.bed);
+      }
+      const f = localStorage.getItem("printer_feedrate");
+      if (f && Number.isFinite(+f)) setFeedrate(+f);
+
+      const t = localStorage.getItem("mat_type");
+      const c = localStorage.getItem("mat_color");
+      const x = localStorage.getItem("mat_text");
+      if (t) setMatType(t);
+      if (c) setMatColor(c);
+      if (x) setMatText(x);
+    } catch {}
+  }, []);
+
+  // polling temps
+  useEffect(() => {
+    if (!printerId) return;
+    let stop = false,
+      to;
+    const num = (v) => (Number.isFinite(+v) ? Math.round(+v) : null);
+    const tick = async () => {
+      try {
+        const r = await api.printer.temps(printerId, { timeoutMs: 12000 });
+        const noz = r?.nozzle ?? r?.temperature?.tool0 ?? {};
+        const bd = r?.bed ?? r?.temperature?.bed ?? {};
+        const nAct = num(noz.actual),
+          nTgt = num(noz.target);
+        const bAct = num(bd.actual),
+          bTgt = num(bd.target);
+        if (nAct !== null) setNozzleActual(nAct);
+        if (bAct !== null) setBedActual(bAct);
+        if (nTgt !== null && nTgt > 0) setNozzleTarget(nTgt);
+        if (bTgt !== null && bTgt > 0) setBedTarget(bTgt);
+      } catch {
+      } finally {
+        if (!stop) to = setTimeout(tick, 3000);
+      }
+    };
+    tick();
+    return () => {
+      stop = true;
+      if (to) clearTimeout(to);
+    };
+  }, [api, printerId]);
+
+  // open/close temp modal
   const openNozzle = () => {
     setActiveModal("nozzle");
     setDraftTemp(nozzleTarget || DEFAULTS.nozzle);
@@ -168,93 +332,9 @@ export default function RightPanel({
     setDraftTemp(bedTarget || DEFAULTS.bed);
   };
   const closeModal = () => !modalBusy && setActiveModal(null);
-
   const kbOpen = (e, fn) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), fn());
 
-  // Remaining Time
-  const remainingTime = useMemo(() => externalRemainingTime ?? "-", [externalRemainingTime]);
-
-  // วัสดุที่จะแสดง
-  const materialLabel = useMemo(() => {
-    const t = (externalMaterial || "").toString().trim();
-    if (!t) return "-";
-    const m = t.match(/\b(PLA|PETG|ABS|ASA|TPU)\b/i);
-    return (m ? m[1] : t).toUpperCase();
-  }, [externalMaterial]);
-
-  const materialColor =
-    MATERIAL_COLORS[materialLabel] ??
-    (/(^PLA\b)/i.test(materialLabel)
-      ? MATERIAL_COLORS.PLA
-      : /(PETG)/i.test(materialLabel)
-      ? MATERIAL_COLORS.PETG
-      : /(ABS)/i.test(materialLabel)
-      ? MATERIAL_COLORS.ABS
-      : /(ASA)/i.test(materialLabel)
-      ? MATERIAL_COLORS.ASA
-      : /(TPU)/i.test(materialLabel)
-      ? MATERIAL_COLORS.TPU
-      : MATERIAL_COLORS.DEFAULT);
-
-  /* ------- โหลด target และ feedrate ล่าสุดจาก localStorage (ถ้ามี) ------- */
-  useEffect(() => {
-    try {
-      if (typeof localStorage === "undefined") return;
-      const raw = localStorage.getItem("printer_setpoints");
-      if (raw) {
-        const sp = JSON.parse(raw);
-        if (Number.isFinite(sp?.nozzle) && sp.nozzle > 0) setNozzleTarget(sp.nozzle);
-        if (Number.isFinite(sp?.bed) && sp.bed > 0) setBedTarget(sp.bed);
-      }
-      const f = localStorage.getItem("printer_feedrate");
-      if (f && Number.isFinite(+f)) setFeedrate(+f);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  /* ------- Poll ค่าจริงจากเครื่อง ------- */
-  useEffect(() => {
-    if (!printerId) return;
-    let stop = false;
-    let t;
-
-    const num = (v) => (Number.isFinite(+v) ? Math.round(+v) : null);
-
-    const tick = async () => {
-      try {
-        const r = await api.printer.temps(printerId, { timeoutMs: 12000 });
-
-        // รองรับทั้ง payload แบบใหม่/เก่า
-        const noz = r?.nozzle ?? r?.temperature?.tool0 ?? {};
-        const bd = r?.bed ?? r?.temperature?.bed ?? {};
-
-        const nAct = num(noz.actual);
-        const nTgt = num(noz.target);
-        const bAct = num(bd.actual);
-        const bTgt = num(bd.target);
-
-        if (nAct !== null) setNozzleActual(nAct);
-        if (bAct !== null) setBedActual(bAct);
-
-        // กัน idle ที่ target ส่ง 0
-        if (nTgt !== null && nTgt > 0) setNozzleTarget(nTgt);
-        if (bTgt !== null && bTgt > 0) setBedTarget(bTgt);
-      } catch {
-        /* เงียบไว้ตอน polling */
-      } finally {
-        if (!stop) t = setTimeout(tick, 3000);
-      }
-    };
-
-    tick();
-    return () => {
-      stop = true;
-      if (t) clearTimeout(t);
-    };
-  }, [api, printerId]);
-
-  /* ------- Commit ค่าอุณหภูมิจาก modal ------- */
+  // commit temps
   const commitDraft = useCallback(
     async (finalValue) => {
       if (!printerId) return;
@@ -268,15 +348,13 @@ export default function RightPanel({
           await api.printer.setBedTemp(printerId, finalValue, { timeoutMs: 8000 });
         }
         try {
-          if (typeof localStorage !== "undefined") {
-            localStorage.setItem(
-              "printer_setpoints",
-              JSON.stringify({
-                nozzle: activeModal === "nozzle" ? finalValue : nozzleTarget,
-                bed: activeModal === "bed" ? finalValue : bedTarget,
-              })
-            );
-          }
+          localStorage.setItem(
+            "printer_setpoints",
+            JSON.stringify({
+              nozzle: activeModal === "nozzle" ? finalValue : nozzleTarget,
+              bed: activeModal === "bed" ? finalValue : bedTarget,
+            })
+          );
         } catch {}
         setModalBusy(false);
         setActiveModal(null);
@@ -288,7 +366,7 @@ export default function RightPanel({
     [activeModal, api, printerId, nozzleTarget, bedTarget]
   );
 
-  /* ------- Speed control ------- */
+  // speed
   const changeFeed = async (next) => {
     const clamped = Math.max(MIN_FEED, Math.min(MAX_FEED, next));
     if (clamped === feedrate || speedBusy) return;
@@ -297,9 +375,7 @@ export default function RightPanel({
       await api.printer.setFeedrate(printerId, clamped, { timeoutMs: 8000 });
       setFeedrate(clamped);
       try {
-        if (typeof localStorage !== "undefined") {
-          localStorage.setItem("printer_feedrate", String(clamped));
-        }
+        localStorage.setItem("printer_feedrate", String(clamped));
       } catch {}
     } catch (e) {
       alert(e?.message || "Failed to change speed");
@@ -307,34 +383,18 @@ export default function RightPanel({
       setSpeedBusy(false);
     }
   };
-
-  const stepFeed = (delta) => changeFeed(feedrate + delta);
-
-  // รองรับกดค้าง
+  const stepFeed = (d) => changeFeed(feedrate + d);
   const holdTimerRef = useRef(null);
-  const startHold = (delta) => {
-    stepFeed(delta);
-    if (holdTimerRef.current) clearInterval(holdTimerRef.current);
-    holdTimerRef.current = setInterval(() => stepFeed(delta), 120);
+  const startHold = (d) => {
+    stepFeed(d);
+    clearInterval(holdTimerRef.current);
+    holdTimerRef.current = setInterval(() => stepFeed(d), 120);
   };
   const stopHold = () => {
-    if (holdTimerRef.current) {
-      clearInterval(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
+    clearInterval(holdTimerRef.current);
+    holdTimerRef.current = null;
   };
-
-  // cleanup ป้องกันค้างเมื่อออกจากหน้า
-  useEffect(() => {
-    return () => {
-      if (holdTimerRef.current) {
-        clearInterval(holdTimerRef.current);
-        holdTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  // ปุ่มลูกศรซ้าย/ขวา
+  useEffect(() => () => stopHold(), []);
   const onSpeedKey = (e) => {
     if (e.key === "ArrowLeft") {
       e.preventDefault();
@@ -346,7 +406,28 @@ export default function RightPanel({
     }
   };
 
-  /* ------------------ UI ------------------ */
+  // material selections (เลือกแล้วปิด)
+  const pickType = (t) => {
+    setMatType(t);
+    try {
+      localStorage.setItem("mat_type", t);
+    } catch {}
+    setMatOpen(false);
+    matAnchorRef.current?.focus();
+  };
+  const pickColor = (hex, text) => {
+    setMatColor(hex);
+    setMatText(text || "#111");
+    try {
+      localStorage.setItem("mat_color", hex);
+      localStorage.setItem("mat_text", text || "#111");
+    } catch {}
+    setMatOpen(false);
+    matAnchorRef.current?.focus();
+  };
+
+  const remainingTime = useMemo(() => externalRemainingTime ?? "-", [externalRemainingTime]);
+
   return (
     <div className="right-panel">
       {/* Nozzle + Bed */}
@@ -430,7 +511,7 @@ export default function RightPanel({
         </button>
       </div>
 
-      {/* Remaining Time + Material */}
+      {/* Remaining + Material */}
       <div className="time-material-row">
         <div className="card time-card">
           <div className="card-header center">
@@ -440,18 +521,96 @@ export default function RightPanel({
           <div className="value">{remainingTime}</div>
         </div>
 
-        <div className="card material-card">
+        <div className="card material-card" style={{ position: "relative" }}>
           <div className="card-header center">
             <img src="/icon/Material.png" alt="" className="icon" />
             <div className="label">Material</div>
           </div>
-          <div className="material-circle" title={materialLabel} style={{ backgroundColor: materialColor }}>
-            {materialLabel}
-          </div>
+
+          {/* Trigger */}
+          <button
+            ref={matAnchorRef}
+            className="mat-circle"
+            onClick={() => setMatOpen(v => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={matOpen}
+            style={{
+              background: matColor,
+              color: matText,
+            }}
+          >
+            {matType}
+          </button>
+
+          {/* Popover (fixed positioning from computed state) */}
+          {matOpen && (
+            <div
+              ref={popRef}
+              className={`mat-popover ${
+                matPos.placement === "top" ? "is-top" : "is-bottom"
+              }`}
+              role="dialog"
+              aria-label="Material picker"
+              style={{
+                position: "fixed",
+                top: `${matPos.top}px`,
+                left: `${matPos.left}px`,
+                "--arrow-x": `${Math.round(matPos.arrowX)}px`,
+              }}
+            >
+              <div className="mat-type-row" role="radiogroup" aria-label="Material type">
+                {MATERIAL_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    className={`mat-type ${t === matType ? "is-active" : ""}`}
+                    aria-pressed={t === matType}
+                    onClick={() => {
+                      setMatType(t);
+                      try {
+                        localStorage.setItem("mat_type", t);
+                      } catch {}
+                      setMatOpen(false);
+                      matAnchorRef.current?.focus();
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mat-divider" />
+
+              <div className="mat-grid" role="listbox" aria-label="Material color">
+                {MATERIAL_SWATCHES.map((s) => {
+                  const selected =
+                    (matColor || "").toLowerCase() === s.hex.toLowerCase();
+                  return (
+                    <button
+                      key={s.hex}
+                      title={s.name}
+                      className={`mat-swatch ${selected ? "is-selected" : ""}`}
+                      aria-selected={selected}
+                      style={{ background: s.hex }}
+                      onClick={() => {
+                        setMatColor(s.hex);
+                        setMatText(s.text || "#111");
+                        try {
+                          localStorage.setItem("mat_color", s.hex);
+                          localStorage.setItem("mat_text", s.text || "#111");
+                        } catch {}
+                        setMatOpen(false);
+                        matAnchorRef.current?.focus();
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Temp modal */}
       {activeModal && (
         <TemperatureModal
           title={activeModal === "nozzle" ? "Nozzle Temperature" : "Bed Temperature"}
