@@ -1,32 +1,105 @@
-/* ขนาดควบคุมผ่าน CSS variables:
-   --nb-size (ปุ่ม), --nb-icon (ไอคอน), --nb-dot (จุดแดง) */
+/* ============ NotificationBell.css (compact name) ============ */
+/* sizing via CSS variables */
+:root{
+  --nb-size: 42px;
+  --nb-icon: 28px;
+  --nb-dot: 10px;
+
+  --nb-bg: #ffffff;
+  --nb-fg: #0f172a;          /* slate-900 */
+  --nb-subtle: #6b7280;      /* gray-500 */
+  --nb-muted: #111827;       /* gray-900 */
+
+  --nb-surface: #f8fafc;     /* slate-50 */
+  --nb-hover: #f3f4f6;       /* gray-100 */
+  --nb-ring: #2563eb;        /* blue-600 */
+
+  --nb-panel-shadow: 0 10px 30px rgba(2, 6, 23, .14);
+  --nb-sep: rgba(2, 6, 23, .06);
+
+  /* Badge palette */
+  --nb-badge-success-bg: #e8f8ee;
+  --nb-badge-success-fg: #0e9f6e;
+
+  --nb-badge-info-bg: #e9f0fe;
+  --nb-badge-info-fg: #2563eb;
+
+  --nb-badge-warning-bg: #fff7e6;
+  --nb-badge-warning-fg: #b45309;
+
+  --nb-badge-error-bg: #fde8e8;
+  --nb-badge-error-fg: #d61f1f;
+
+  --nb-badge-neutral-bg: #eef2f7;
+  --nb-badge-neutral-fg: #475569;
+
+  /* NEW: control name text size (top line, next to badge) */
+  --nb-name-size: 8px;   /* ← ปรับตรงนี้ให้เล็ก/ใหญ่ตามต้องการ */
+}
+
+@media (prefers-color-scheme: dark){
+  :root{
+    --nb-bg: #0b1020;
+    --nb-fg: #e5e7eb;
+    --nb-subtle: #9ca3af;
+    --nb-muted: #e5e7eb;
+
+    --nb-surface: #0f172a;
+    --nb-hover: #111827;
+    --nb-ring: #60a5fa;
+
+    --nb-panel-shadow: 0 18px 40px rgba(0,0,0,.45);
+    --nb-sep: rgba(255,255,255,.08);
+
+    --nb-badge-success-bg: #063c28;
+    --nb-badge-success-fg: #34d399;
+
+    --nb-badge-info-bg: #0b2447;
+    --nb-badge-info-fg: #93c5fd;
+
+    --nb-badge-warning-bg: #3b2a04;
+    --nb-badge-warning-fg: #fbbf24;
+
+    --nb-badge-error-bg: #3b0a0a;
+    --nb-badge-error-fg: #f87171;
+
+    --nb-badge-neutral-bg: #1f2937;
+    --nb-badge-neutral-fg: #cbd5e1;
+  }
+}
+
+/* container */
 .notif-wrap { position: relative; display:inline-flex; }
 
 .notif-btn{
   position: relative;
-  width: var(--nb-size, 42px);
-  height: var(--nb-size, 42px);
+  width: var(--nb-size);
+  height: var(--nb-size);
   border: none; border-radius: 999px;
   background: transparent;
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: filter .15s ease, transform .06s ease, background-color .2s ease;
+  outline: none;
 }
-.notif-btn:hover{ filter: brightness(1.05); background: rgba(255,255,255,.15); }
+.notif-btn:hover{ filter: brightness(1.05); background: rgba(255,255,255,.12); }
 .notif-btn:active{ transform: translateY(1px); }
+.notif-btn:focus-visible{
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nb-ring) 35%, transparent);
+}
 
 .notif-icon{
-  width: var(--nb-icon, 28px);
-  height: var(--nb-icon, 28px);
+  width: var(--nb-icon);
+  height: var(--nb-icon);
   object-fit: contain;
 }
 
 .notif-dot{
   position: absolute;
-  top: calc(var(--nb-size, 42px) * 0.18);
-  right: calc(var(--nb-size, 42px) * 0.18);
-  width: var(--nb-dot, 8px);
-  height: var(--nb-dot, 8px);
+  top: calc(var(--nb-size) * 0.16);
+  right: calc(var(--nb-size) * 0.16);
+  width: var(--nb-dot);
+  height: var(--nb-dot);
   border-radius: 999px;
   background: #ff2d55;
   box-shadow: 0 0 0 2px rgba(0,0,0,.25);
@@ -35,86 +108,185 @@
 /* ---------- Panel ---------- */
 .notif-panel{
   position: absolute;
-  right: 0; top: calc(100% + 8px);
-  width: min(380px, 88vw);
-  background: #fff;
-  color: #111827;
+  right: 0; top: calc(100% + 10px);
+  width: min(420px, 92vw);
+  background: var(--nb-bg);
+  color: var(--nb-fg);
   border-radius: 14px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  box-shadow: var(--nb-panel-shadow);
   padding: 10px;
   z-index: 1000;
+  border: 1px solid var(--nb-sep);
+  transform-origin: 90% -10px;
+  animation: nb-pop .16s ease-out;
+}
+@keyframes nb-pop{
+  from { opacity: 0; transform: translateY(-6px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.notif-panel::before{
+  content:"";
+  position:absolute;
+  top:-8px; right: 14px;
+  width:14px; height:14px;
+  background: var(--nb-bg);
+  border-left:1px solid var(--nb-sep);
+  border-top:1px solid var(--nb-sep);
+  transform: rotate(45deg);
 }
 
+/* header */
 .notif-head{
   display:flex; align-items:center; justify-content: space-between;
-  font-weight: 800; font-size: 14px; padding: 6px 6px 8px;
+  font-weight: 800; font-size: 14px; padding: 6px 8px 10px;
 }
 .notif-mark{
-  font-size: 12px; font-weight: 700; color: #2563eb;
-  background: transparent; border:none; cursor:pointer; padding:4px 6px; border-radius:8px;
+  font-size: 12px; font-weight: 700; color: var(--nb-ring);
+  background: transparent; border:none; cursor:pointer; padding:6px 8px; border-radius:8px;
 }
-.notif-mark:hover{ background:#eff6ff; }
+.notif-mark:hover{ background: color-mix(in oklab, var(--nb-ring) 12%, transparent); }
+.notif-mark:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nb-ring) 35%, transparent);
+}
 
+/* list */
 .notif-list{
   display:flex; flex-direction: column; gap: 6px;
-  max-height: 60vh; overflow:auto; padding: 4px;
+  max-height: 60vh; overflow:auto; padding: 6px 2px 2px;
 }
-.notif-empty{ color:#6b7280; padding: 12px 8px; font-weight: 600; }
+.notif-empty{ color: var(--nb-subtle); padding: 14px 10px; font-weight: 600; }
 
-/* ---------- Items (เฉพาะข้อความ ไม่มีรูป) ---------- */
+/* item */
 .notif-item{
-  display:flex; align-items:center; gap:6px;
+  display:flex; align-items:stretch; gap:6px;
   background: transparent; border-radius:12px; padding:2px;
+  border: 1px solid transparent;
 }
 
-/* ปุ่มคลิกหลัก */
+/* main button */
 .notif-main{
-  display:flex; align-items:center; gap:10px;
+  display:flex; align-items:center; gap:10px;  /* tighter */
   flex:1;
   background: transparent; border:0; text-align:left;
-  padding:10px 8px; border-radius:12px; cursor:pointer;
-  transition: background-color .15s ease, transform .06s ease;
+  padding:10px 12px; border-radius:12px; cursor:pointer;  /* tighter */
+  transition: background-color .15s ease, transform .06s ease, border-color .15s ease;
+  outline: none;
 }
-.notif-main:hover{ background:#f3f4f6; }
-.notif-item.unread .notif-main{ background:#f8fafc; }
+.notif-main:hover{ background: var(--nb-hover); }
+.notif-item.unread .notif-main{ background: var(--nb-surface); border: 1px solid var(--nb-sep); }
 .notif-main:active{ transform: translateY(1px); }
-
-/* แบบ only-text (ไม่มี thumb) */
-.notif-main.only-text{ padding-left:12px; }
-
-/* เนื้อหา */
-.notif-body{ display:flex; flex-direction:column; gap:2px; min-width:0; }
-.notif-body .line1{ display:flex; align-items:center; gap:8px; min-width:0; }
-.name{ font-weight:700; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.time{ margin-left:auto; font-size: 11px; color:#6b7280; font-weight:700; }
-.line2{ font-size: 13px; color:#111827; font-weight:700; }
-.line3{ font-size:12px; color:#6b7280; }
-.line3 .printer strong{ color:#374151; }
-
-/* ป้ายสถานะ */
-.badge{
-  font-size: 11px; font-weight: 900; padding: 2px 6px; border-radius: 999px;
-  background:#e5e7eb; color:#111827; flex:0 0 auto;
+.notif-main:focus-visible{
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nb-ring) 35%, transparent);
 }
-.badge.done{ background:#e7f9ed; color:#0e9f6e; }
-.badge.error{ background:#fde8e8; color:#d61f1f; }
 
-/* ปุ่มลบทีละรายการ */
+/* only-text (no thumb) */
+.notif-main.only-text{ padding-left:14px; }
+
+/* content */
+.notif-body{ display:flex; flex-direction:column; gap:3px; min-width:0; width:100%; } /* tighter */
+
+/* first line */
+.notif-body .line1{
+  display:flex; align-items:center; gap:6px;   /* tighter */
+  min-width:0;
+}
+
+/* compact badge */
+.badge{
+  font-size: 10.5px;
+  font-weight: 900;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background:#e5e7eb; color:#111827;
+  flex:0 0 auto;
+  letter-spacing:.2px;
+  white-space: nowrap;
+}
+
+/* name fits remaining space next to badge */
+.name{
+  font-weight:600;                     /* ลดความหนาให้ดูเล็กลง */
+  color: var(--nb-muted);
+  font-size: var(--nb-name-size);      /* ← ใช้ตัวแปรกำหนดขนาด */
+  line-height: 1.1;                    /* สูงน้อยลง */
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+.time{
+  margin-left:auto;
+  font-size: 11px;
+  color: var(--nb-subtle);
+  font-weight:700;
+  flex: 0 0 auto;
+}
+
+.line2{ font-size: 12.5px; color: var(--nb-fg); font-weight:700; line-height: 1.25; }
+.line3{ font-size:12px; color: var(--nb-subtle); }
+.line3 strong{ color:#374151; }
+@media (prefers-color-scheme: dark){
+  .line3 strong{ color:#cbd5e1; }
+}
+
+/* subtle separator */
+.notif-item + .notif-item{ margin-top: 2px; }
+
+/* palette */
+.badge.success { background: var(--nb-badge-success-bg); color: var(--nb-badge-success-fg); }
+.badge.info    { background: var(--nb-badge-info-bg);    color: var(--nb-badge-info-fg); }
+.badge.warning { background: var(--nb-badge-warning-bg); color: var(--nb-badge-warning-fg); }
+.badge.error   { background: var(--nb-badge-error-bg);   color: var(--nb-badge-error-fg); }
+.badge.neutral { background: var(--nb-badge-neutral-bg); color: var(--nb-badge-neutral-fg); }
+
+/* remove button */
 .notif-remove{
   background: transparent; border:0;
-  width:28px; height:28px; border-radius:999px;
-  color:#9ca3af; font-size:18px; line-height:1;
+  width:30px; height:30px; border-radius:999px;
+  color: var(--nb-subtle); font-size:18px; line-height:1;
   cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
+  flex: 0 0 auto; z-index: 1;
+  margin-right: 2px;
 }
-.notif-remove:hover{ background:#f3f4f6; color:#111; }
-/* ทำให้ปุ่ม X ไม่ถูกพื้นที่ปุ่มหลักทับ */
-.notif-remove { flex: 0 0 auto; z-index: 1; }
+.notif-remove:hover{ background: var(--nb-hover); color: var(--nb-fg); }
+.notif-remove:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nb-ring) 35%, transparent);
+}
 
-
-/* ---------- Navbar container ---------- */
+/* navbar container */
 .navbar-right { display:flex; align-items:center; gap: 10px; }
 
-/* ลื่นตาเวลาสกรอลล์ */
+/* smooth scrollbar */
 .notif-list::-webkit-scrollbar{ width:10px; }
-.notif-list::-webkit-scrollbar-thumb{ background:#e5e7eb; border-radius:8px; }
-.notif-list:hover::-webkit-scrollbar-thumb{ background:#d1d5db; }
+.notif-list::-webkit-scrollbar-thumb{
+  background: color-mix(in oklab, var(--nb-fg) 10%, transparent);
+  border-radius:8px;
+}
+.notif-list:hover::-webkit-scrollbar-thumb{
+  background: color-mix(in oklab, var(--nb-fg) 16%, transparent);
+}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce){
+  .notif-btn, .notif-main, .notif-panel{
+    transition: none !important; animation: none !important;
+  }
+}
+
+/* dark override */
+@media (prefers-color-scheme: dark){
+  .badge{ background:#111827; color:#e5e7eb; }
+}
+
+/* extra: on very small viewports, shrink name more */
+@media (max-width: 480px){
+  :root{ --nb-name-size: 9px; }
+}
+.notif-body .line1 .name{
+  font-size: var(--nb-name-size) !important;
+}
+
+
