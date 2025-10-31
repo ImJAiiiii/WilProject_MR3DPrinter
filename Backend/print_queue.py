@@ -8,12 +8,15 @@ import asyncio
 import inspect
 import mimetypes
 import logging
-from datetime import datetime, timedelta
+import time
+import uuid
+from threading import Lock
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple, Callable, Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query
 from sqlalchemy import case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,68 +26,333 @@ from auth import (
     get_current_user,
     get_confirmed_user,
     get_manager_user,
-    get_optional_user,
+    get_optional_user,  # ให้ list_queue ใช้งานได้ทั้ง auth / header admin
 )
-
 from models import User, Printer, PrintJob, StorageFile
 from schemas import (
     PrintJobCreate, PrintJobPatch, PrintJobOut,
-    QueueListOut, QueueReorderIn, CurrentJobOut
+    QueueListOut, CurrentJobOut, QueueReorderIn, FinalizeIn,
 )
-from notifications import notify_user
+
+# ----------------------------- Notifications ---------------------------------
+# notify_job_event: DM ไปหา "ผู้กดพิมพ์" (flow เดิมฝั่งเว็บ/Teams)
+# notify_user: แจ้งเตือนทั่วไป (ใช้บนสถานี/Unity/Holo/เว็บ)
+try:
+    from notifications import notify_job_event  # type: ignore
+except Exception:  # pragma: no cover
+    async def notify_job_event(*args, **kwargs):  # type: ignore
+        return None
+
+try:
+    from notifications import notify_user  # type: ignore
+except Exception:  # pragma: no cover
+    async def notify_user(*args, **kwargs):  # type: ignore
+        return None
+
+# ตัวช่วย fire-and-forget ที่ปลอดภัยกับทั้ง sync/async (ไม่ block main thread)
+def _bgcall(func_or_coro, /, *args, **kwargs):
+    """
+    รับทั้ง:
+      - coroutine object    -> schedule ทันที
+      - async def function  -> สร้าง task
+      - sync function       -> ส่งไปรันใน thread pool
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    # case: รับเป็น coroutine object มาเลย
+    if inspect.iscoroutine(func_or_coro):
+        if loop:
+            loop.create_task(func_or_coro)
+        else:
+            import threading
+            threading.Thread(target=lambda: asyncio.run(func_or_coro), daemon=True).start()
+        return
+
+    # case: เป็นฟังก์ชัน (async หรือ sync)
+    if inspect.iscoroutinefunction(func_or_coro):
+        if loop:
+            loop.create_task(func_or_coro(*args, **kwargs))
+        else:
+            import threading
+            threading.Thread(target=lambda: asyncio.run(func_or_coro(*args, **kwargs)), daemon=True).start()
+        return
+
+    # sync function
+    if loop:
+        loop.run_in_executor(None, lambda: func_or_coro(*args, **kwargs))
+    else:
+        import threading
+        threading.Thread(target=lambda: func_or_coro(*args, **kwargs), daemon=True).start()
+
+# ------------------------------- S3 helpers ----------------------------------
 from s3util import (
     copy_object, head_object, delete_object, new_storage_key, presign_get,
 )
-from pydantic import ValidationError
 
-# ถ้ามี put_object ให้ใช้
+# optional put_object
 try:
-    from s3util import put_object
+    from s3util import put_object  # type: ignore
 except Exception:  # pragma: no cover
     put_object = None
 
+# optional finalize helper (แพ็กเกจ/ไฟล์เดียว → catalog/<Model>/...)
+try:
+    from .custom_storage_s3 import finalize_to_storage  # type: ignore
+except Exception:
+    try:
+        from custom_storage_s3 import finalize_to_storage  # type: ignore
+    except Exception:
+        finalize_to_storage = None
+
+# optional preview renderer
+_HAS_RENDERER = False
+try:
+    from preview_gcode_image import gcode_to_preview_png  # type: ignore
+    _HAS_RENDERER = True
+except Exception:
+    gcode_to_preview_png = None  # type: ignore
+
 router = APIRouter(tags=["print-queue"])
 logger = logging.getLogger("print_queue")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+
+# =============================================================================
+# Canonical Event Helpers (Holo-first, ใช้ทุกช่องทางจากไฟล์นี้ไฟล์เดียว)
+# =============================================================================
+_CANONICAL_TYPES = {
+    "print.queued", "print.started", "print.completed",
+    "print.failed", "print.canceled", "print.paused", "print.issue",
+}
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def _norm_event_type(original_type: Optional[str], status: Optional[str] = None) -> str:
+    t = (original_type or "").strip().lower()
+    s = (status or "").strip().lower()
+
+    if t in _CANONICAL_TYPES:
+        return t
+    if t == "job-event" and s:
+        if s == "cancelled":
+            s = "canceled"
+        if s in {"queued","started","completed","failed","canceled","paused","issue"}:
+            return f"print.{s}"
+    if t == "print_issue":
+        return "print.issue"
+    if t == "print.cancelled":
+        return "print.canceled"
+    return "print.issue"
+
+def _norm_severity(t: str, sev_in: Optional[str]) -> str:
+    base = (sev_in or "").strip().lower()
+    if base in {"success","info","warning","error","critical","neutral"}:
+        return base
+    if t == "print.completed": return "success"
+    if t == "print.failed":    return "error"
+    if t == "print.paused":    return "warning"
+    if t == "print.canceled":  return "neutral"
+    if t in {"print.started", "print.queued"}: return "info"
+    if t == "print.issue":     return "warning"
+    return "info"
+
+def _format_event(*,
+    type: Optional[str] = None,
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    title: Optional[str] = None,
+    message: Optional[str] = None,
+    printer_id: Optional[str] = None,
+    data: Optional[dict] = None,
+    created_at: Optional[str] = None,
+    read: Optional[bool] = False,
+) -> dict:
+    """
+    ให้การ์ด Teams/เว็บมีข้อมูลครบและสอดคล้อง:
+    - ใส่ status เป็น top-level เสมอ (queued/started/completed/failed/canceled/paused/issue)
+    - sync data.status ด้วย
+    """
+    t = _norm_event_type(type, status)
+    sev = _norm_severity(t, severity)
+
+    canonical_status = (status or "").strip().lower()
+    if not canonical_status:
+        if t.startswith("print.") and len(t.split(".", 1)) == 2:
+            canonical_status = t.split(".", 1)[1]
+        else:
+            canonical_status = "issue"
+
+    default_titles = {
+        "print.queued": "Queued",
+        "print.started": "Print started",
+        "print.completed": "Print completed",
+        "print.failed": "Print failed",
+        "print.canceled": "Print canceled",
+        "print.paused": "Print paused",
+        "print.issue": "Printer issue",
+    }
+    ttl = title or default_titles.get(t, "Notification")
+
+    d = dict(data or {})
+    if printer_id and not str(d.get("printer_id") or "").strip():
+        d["printer_id"] = printer_id
+    nm = (d.get("name") or d.get("job_name") or d.get("filename") or d.get("file") or "").strip()
+    if nm:
+        d.setdefault("name", nm)
+        d.setdefault("job_name", nm)
+    if not str(d.get("status") or "").strip():
+        d["status"] = canonical_status
+
+    if not message:
+        prn = d.get("printer_id") or printer_id
+        name_txt = f"“{nm}” " if nm else ""
+        on_txt   = f" on {prn}" if prn else ""
+        template = {
+            "queued":    f"{name_txt}entered the queue{on_txt}.",
+            "started":   f"{name_txt}is now starting{on_txt}.",
+            "completed": f"{name_txt}finished{on_txt}.",
+            "failed":    f"{name_txt}failed{on_txt}.",
+            "canceled":  f"{name_txt}was canceled{on_txt}.",
+            "paused":    f"{name_txt}has been paused{on_txt}.",
+            "issue":     f"Issue detected {name_txt}{on_txt}.",
+        }
+        message = template.get(canonical_status, f"{name_txt}updated{on_txt}.")
+
+    return {
+        "id": str(uuid.uuid4()),
+        "type": t,
+        "status": canonical_status,            # สำคัญสำหรับ Teams
+        "severity": sev,
+        "title": ttl,
+        "message": message,
+        "printer_id": printer_id,
+        "data": d,
+        "created_at": created_at or _now_iso(),
+        "read": bool(read),
+    }
+
+async def _call_notify_user_async(db: Session, employee_id: str, ev: dict):
+    """รองรับทั้งสอง signature + ทั้ง sync/async implementation ของ notifications.notify_user"""
+    # เตรียม args ให้ลองทั้ง kwargs และ payload=ev
+    async def _run_kwargs():
+        res = notify_user(db, employee_id, **ev)
+        if inspect.iscoroutine(res):
+            return await res
+        return res
+
+    async def _run_payload():
+        res = notify_user(db, employee_id, payload=ev)
+        if inspect.iscoroutine(res):
+            return await res
+        return res
+
+    try:
+        return await _run_kwargs()
+    except TypeError:
+        return await _run_payload()
+
+async def _call_notify_job_event_async(db: Session, ev: dict):
+    """รองรับทั้งสอง signature + ทั้ง sync/async implementation ของ notifications.notify_job_event"""
+    async def _run_kwargs():
+        res = notify_job_event(db, ev, "canonical")
+        if inspect.iscoroutine(res):
+            return await res
+        return res
+
+    async def _run_payload():
+        res = notify_job_event(db, payload=ev)
+        if inspect.iscoroutine(res):
+            return await res
+        return res
+
+    try:
+        return await _run_kwargs()
+    except TypeError:
+        return await _run_payload()
+
+def _emit_event_all_channels(db: Session, employee_id: str, ev: dict):
+    """
+    ส่ง payload เดียวไปทุกปลายทาง (เว็บ/Holo/Teams)
+    ใช้ async wrapper เสมอ เพื่อหลีกเลี่ยง "coroutine was never awaited"
+    """
+    try:
+        _bgcall(_call_notify_user_async, db, employee_id, ev)
+    except Exception:
+        logger.exception("notify_user spawn failed")
+
+    try:
+        _bgcall(_call_notify_job_event_async, db, ev)
+    except Exception:
+        logger.exception("notify_job_event spawn failed")
+
+# =============================================================================
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() not in {"0", "false", "no", "off", ""}
 
 ADMIN_TOKEN = (os.getenv("ADMIN_TOKEN") or "").strip()
 DEFAULT_PRINTER_ID = os.getenv("DEFAULT_PRINTER_ID", "prusa-core-one")
-BACKEND_INTERNAL_BASE = (os.getenv("BACKEND_INTERNAL_BASE", "http://127.0.0.1:8001")).rstrip("/")
 
-ALLOWED_SOURCE = {"upload", "history", "storage"}
+BACKEND_INTERNAL_BASE = (
+    os.getenv("MAIN_BACKEND")
+    or os.getenv("BACKEND_INTERNAL_BASE")
+    or "http://127.0.0.1:8001"
+).rstrip("/")
 
-def _check_admin_token(token: str):
-    if ADMIN_TOKEN and token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or "").strip().strip('"').strip("'")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "Delta")
 
-# ---------- OctoPrint settings ----------
+AUTO_START_ON_ENQUEUE    = _env_bool("AUTO_START_ON_ENQUEUE", True)
+RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
+ALLOW_ADMIN_HEADER       = _env_bool("ALLOW_ADMIN_HEADER", True)
+
+AUTO_PREVIEW_ON_ENQUEUE = _env_bool("AUTO_PREVIEW_ON_ENQUEUE", True)
+PREVIEW_HIDE_TRAVEL     = _env_bool("SLICER_PREVIEW_HIDE_TRAVEL", True)
+PREVIEW_DPI             = int(os.getenv("SLICER_PREVIEW_DPI") or "500")
+PREVIEW_LW              = float(os.getenv("SLICER_PREVIEW_LW") or "0.8")
+PREVIEW_FADE            = float(os.getenv("SLICER_PREVIEW_FADE") or "0.7")
+PREVIEW_ANTIALIAS       = _env_bool("SLICER_PREVIEW_AA", True)
+MIN_OK_PREVIEW_BYTES    = int(os.getenv("MIN_OK_PREVIEW_BYTES") or "4096")
+PREVIEW_DEBOUNCE_SEC    = float(os.getenv("PREVIEW_DEBOUNCE_SEC") or "300")
+_PREVIEW_LOCKS: Dict[str, Lock] = {}
+_PREVIEW_LAST_TS: Dict[str, float] = {}
+
+QUEUE_IDEMP_TTL_SEC = float(os.getenv("QUEUE_IDEMP_TTL_SEC") or "12.0")
+_IDEMP_LOCK = Lock()
+_IDEMP_CACHE: Dict[str, Tuple[float, int]] = {}
+
 def _clean_env(v: Optional[str]) -> str:
     return (v or "").strip().strip('"').strip("'")
 
-OCTO_BASE = _clean_env(os.getenv("OCTOPRINT_BASE") or "").rstrip("/")
+OCTO_BASE = _clean_env(os.getenv("OCTOPRINT_BASE") or os.getenv("OCTOPRINT_BASE_URL") or "").rstrip("/")
 OCTO_KEY  = _clean_env(os.getenv("OCTOPRINT_API_KEY") or "")
-
 _timeout_raw = _clean_env(os.getenv("OCTOPRINT_HTTP_TIMEOUT") or os.getenv("OCTOPRINT_TIMEOUT") or "30")
 try:
-    import re as _re
-    _m = _re.match(r"^\d+(\.\d+)?", _timeout_raw)
+    _m = re.match(r"^\d+(\.\d+)?", _timeout_raw)
     OCTO_TIMEOUT = float(_m.group(0)) if _m else 30.0
 except Exception:
     OCTO_TIMEOUT = 30.0
 
-PUBLIC_BASE_URL = _clean_env(os.getenv("PUBLIC_BASE_URL") or "")
-
-# ---------------------------------------------------------------------------
-# Helpers / Utils
-# ---------------------------------------------------------------------------
+ALLOWED_SOURCE = {"upload", "history", "storage"}
 
 def status_order_expr():
     return case(
         (PrintJob.status.in_(("processing", "printing")), 0),
-        (PrintJob.status == "queued",     1),
-        (PrintJob.status == "paused",     2),
-        (PrintJob.status == "completed",  3),
-        (PrintJob.status == "failed",     4),
-        (PrintJob.status == "canceled",   5),
+        (PrintJob.status == "queued", 1),
+        (PrintJob.status == "paused", 2),
+        (PrintJob.status == "completed", 3),
+        (PrintJob.status == "failed", 4),
+        (PrintJob.status == "canceled", 5),
         else_=9,
     ).label("status_rank")
 
@@ -93,10 +361,9 @@ def _emp(x) -> str:
 
 def _norm_printer_id(v: Optional[str]) -> str:
     s = (v or "").strip()
-    s = re.sub(r"[^\w\s\-]+", "", s, flags=re.U)
-    s = re.sub(r"\s+", "-", s, flags=re.U)
-    s = (s or DEFAULT_PRINTER_ID).lower()
-    return s
+    s = re.sub(r"[^\w\s\-]+", "", s)
+    s = re.sub(r"\s+", "-", s)
+    return (s or DEFAULT_PRINTER_ID).lower()
 
 def _get_or_create_printer(db: Session, pid: str) -> Printer:
     pid = _norm_printer_id(pid)
@@ -141,7 +408,7 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
         j_source = "storage"
     try:
         o = PrintJobOut.model_validate(job, from_attributes=True)
-    except ValidationError:
+    except Exception:
         payload = {k: getattr(job, k, None) for k in [
             "id","printer_id","employee_id","name","thumb","time_min","status",
             "uploaded_at","started_at","finished_at","octoprint_job_id"
@@ -162,8 +429,8 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
 def _guess_ct(name_or_key: str, default: str = "application/octet-stream") -> str:
     ct, _ = mimetypes.guess_type(name_or_key or "")
     lower = str(name_or_key or "").lower()
-    if not ct and lower.endswith(".gcode"):
-        ct = "text/plain"
+    if not ct and lower.endswith((".gcode", ".gco", ".gc")):
+        ct = "text/x.gcode"
     if not ct and lower.endswith(".stl"):
         ct = "model/stl"
     return ct or default
@@ -172,8 +439,17 @@ def _is_gcode_name(name_or_key: str) -> bool:
     lower = (name_or_key or "").lower()
     return lower.endswith((".gcode", ".gco", ".gc"))
 
-# ---------- Background submit helper ----------
+def _is_stl_name(name_or_key: str) -> bool:
+    return (name_or_key or "").lower().endswith(".stl")
 
+def _resolve_owner_by_gkey(db: Session, gcode_key_or_path: Optional[str], default_emp: str) -> str:
+    k = (gcode_key_or_path or "").strip()
+    if not k or not k.startswith(("storage/", "catalog/")):
+        return default_emp
+    row = db.query(StorageFile).filter(StorageFile.object_key == k).first()
+    return _emp(row.employee_id) if row and row.employee_id else default_emp
+
+# ----------------------- Background submit helper ----------------------------
 async def _run_async(fn: Callable[..., Any], *args, **kwargs):
     await fn(*args, **kwargs)
 
@@ -191,17 +467,16 @@ def _submit_bg(tasks: Optional[BackgroundTasks], fn: Callable[..., Any], *args, 
         else:
             loop.run_in_executor(None, lambda: fn(*args, **kwargs))
     except RuntimeError:
-        pass
+        _bgcall(fn, *args, **kwargs)
 
-# ---------- storage helpers ----------
-
+# --------------------------- storage helpers --------------------------------
 def _ensure_storage_record(
     db: Session,
     employee_id: str,
     object_key: str,
     filename_hint: Optional[str] = None,
 ) -> None:
-    if not object_key or not object_key.startswith("storage/"):
+    if not object_key or not object_key.startswith(("storage/", "catalog/")):
         return
     exists = (
         db.query(StorageFile)
@@ -218,14 +493,14 @@ def _ensure_storage_record(
     size = None
     try:
         h = head_object(object_key)
-        size = int(h.get("ContentLength", 0) or 0)
-        ct = h.get("ContentType") or ct
+        size = int(h.get("ContentLength", 0) or h.get("Content-Length", "0") or 0)
+        ct = (h.get("ContentType") or h.get("Content-Type") or ct)
     except Exception:
         pass
     row = StorageFile(
         employee_id=_emp(employee_id),
         filename=base,
-        name=None,
+        name="",
         object_key=object_key,
         content_type=ct,
         size=size,
@@ -257,16 +532,25 @@ def _ingest_uploads_to_storage(src_path: str, dst_name: str) -> str:
     dst_key = new_storage_key(dst_name)
     try:
         with httpx.Client(timeout=OCTO_TIMEOUT, follow_redirects=True) as c:
-            r = c.get(url)
-            r.raise_for_status()
+            r = c.get(url); r.raise_for_status()
             data = r.content
     except Exception as e:
         raise HTTPException(500, f"read_uploads_failed:{src_path}") from e
     try:
-        put_object(dst_key, data, _guess_ct(dst_name))
+        put_object(dst_key, data, _guess_ct(dst_name))  # type: ignore
     except Exception as e:
         raise HTTPException(500, f"storage_put_failed:{dst_key}") from e
     return dst_key
+
+def _derive_model_for_finalize(printer_id: str, payload: Optional[PrintJobCreate]) -> str:
+    try:
+        if payload and isinstance(payload.template, dict):
+            m = payload.template.get("model")
+            if isinstance(m, str) and m.strip():
+                return m.strip()
+    except Exception:
+        pass
+    return DEFAULT_MODEL
 
 def _finalize_object_if_staging(
     db: Session,
@@ -274,10 +558,13 @@ def _finalize_object_if_staging(
     src_key: Optional[str],
     display_name: Optional[str] = None,
     want_record: bool = True,
+    *,
+    model_for_catalog: Optional[str] = None,
+    user: Optional[User] = None,
 ) -> Optional[str]:
     if not src_key:
         return src_key
-    if src_key.startswith("storage/"):
+    if src_key.startswith(("storage/", "catalog/")):
         if want_record:
             _ensure_storage_record(db, employee_id, src_key, None)
         return src_key
@@ -291,28 +578,176 @@ def _finalize_object_if_staging(
         return src_key
     if src_key.startswith("staging/"):
         src_base = os.path.basename(src_key)
-        if not _is_gcode_name(src_base):
-            logger.info("Skip finalize non-gcode from staging: %s", src_key)
+        if not (_is_gcode_name(src_base) or _is_stl_name(src_base)):
+            logger.info("Skip finalize unknown type from staging: %s", src_key)
             return src_key
-        dst_key = new_storage_key(src_base)
-        ct = _guess_ct(src_base)
+        if finalize_to_storage is None:
+            dst_key = new_storage_key(src_base)
+            ct = _guess_ct(src_base)
+            try:
+                copy_object(src_key, dst_key, content_type=ct)
+            except Exception as e:
+                raise HTTPException(500, f"storage_copy_failed:{src_key}") from e
+            if want_record:
+                _ensure_storage_record(db, employee_id, dst_key, None)
+            try:
+                delete_object(src_key)
+            except Exception:
+                pass
+            return dst_key
+        fin = FinalizeIn(
+            object_key=src_key,
+            filename=src_base,
+            model=(model_for_catalog or DEFAULT_MODEL),
+            target="catalog",
+        )
         try:
-            copy_object(src_key, dst_key, content_type=ct)
+            out = finalize_to_storage(fin, db=db, me=user)  # type: ignore
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(500, f"storage_copy_failed:{src_key}") from e
-        if want_record:
-            _ensure_storage_record(db, employee_id, dst_key, None)
-        try:
-            delete_object(src_key)
-        except Exception:
-            pass
-        return dst_key
+            raise HTTPException(500, f"finalize_failed:{e}")
+        return out.object_key
     return src_key
 
-# ---------- OctoPrint uploader/dispatcher ----------
+# --------------------------- preview helpers ---------------------------------
+def _preview_key_for(gcode_key: Optional[str]) -> Optional[str]:
+    if not gcode_key:
+        return None
+    return re.sub(r"\.(gcode|gco|gc)$", ".preview.png", gcode_key, flags=re.I)
 
+def _download_to_temp(object_key: str) -> Tuple[str, bytes]:
+    url = presign_get(object_key)
+    with httpx.Client(timeout=OCTO_TIMEOUT, follow_redirects=True) as c:
+        r = c.get(url); r.raise_for_status()
+        return object_key, r.content
+
+def _auto_render_preview(gcode_key: str) -> Optional[str]:
+    if not (_HAS_RENDERER and put_object and gcode_key and _is_gcode_name(gcode_key)):
+        return None
+    try:
+        import tempfile
+        _, g_bytes = _download_to_temp(gcode_key)
+        with tempfile.TemporaryDirectory() as td:
+            gpath = os.path.join(td, "src.gcode")
+            png   = os.path.join(td, "out.png")
+            with open(gpath, "wb") as f:
+                f.write(g_bytes)
+            gcode_to_preview_png(  # type: ignore
+                gpath, png,
+                include_travel=(not PREVIEW_HIDE_TRAVEL),
+                lw=PREVIEW_LW,
+                fade=PREVIEW_FADE,
+                dpi=PREVIEW_DPI,
+                antialias=PREVIEW_ANTIALIAS,
+            )
+            with open(png, "rb") as pf:
+                preview_key = _preview_key_for(gcode_key)
+                if not preview_key:
+                    return None
+                put_object(preview_key, pf.read(), "image/png")  # type: ignore
+                logger.info("Preview rendered: %s", preview_key)
+                return preview_key
+    except Exception:
+        logger.exception("auto-render preview failed for %s", gcode_key)
+        return None
+
+def ensure_preview_once(gcode_key: str) -> Optional[str]:
+    preview_key = _preview_key_for(gcode_key)
+    if not preview_key:
+        return None
+    try:
+        h = head_object(preview_key)
+        size = int(h.get("Content-Length", "0") or h.get("ContentLength", 0) or 0)
+        if size >= MIN_OK_PREVIEW_BYTES:
+            _PREVIEW_LAST_TS[preview_key] = time.time()
+            return preview_key
+    except Exception:
+        pass
+    last = _PREVIEW_LAST_TS.get(preview_key, 0.0)
+    if (time.time() - last) < PREVIEW_DEBOUNCE_SEC:
+        # มี cache/debounce → ยอมคืน key ให้ FE ใช้ URL โหลดเมื่อไฟล์พร้อม
+        return preview_key
+    lock = _PREVIEW_LOCKS.setdefault(preview_key, Lock())
+    acquired = lock.acquire(blocking=False)
+    if not acquired:
+        return preview_key
+    try:
+        try:
+            h2 = head_object(preview_key)
+            size2 = int(h2.get("Content-Length", "0") or h2.get("ContentLength", 0) or 0)
+            if size2 >= MIN_OK_PREVIEW_BYTES:
+                _PREVIEW_LAST_TS[preview_key] = time.time()
+                return preview_key
+        except Exception:
+            pass
+        res = _auto_render_preview(gcode_key)
+        if res:
+            _PREVIEW_LAST_TS[preview_key] = time.time()
+        return res or preview_key
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
+
+# --------------------------- Idempotent enqueue ------------------------------
+def _make_idem_key(printer_id: str, employee_id: str, gcode_key: Optional[str], explicit: Optional[str]) -> Optional[str]:
+    if explicit:
+        return explicit.strip()
+    if not gcode_key:
+        return None
+    return f"enqueue:{_norm_printer_id(printer_id)}:{_emp(employee_id)}:{gcode_key}"
+
+def _find_recent_duplicate_job(
+    db: Session,
+    printer_id: str,
+    employee_id: str,
+    gcode_key_or_path: Optional[str],
+) -> Optional[PrintJob]:
+    if not gcode_key_or_path:
+        return None
+    cutoff = datetime.utcnow() - timedelta(seconds=QUEUE_IDEMP_TTL_SEC)
+    return (
+        db.query(PrintJob)
+        .filter(
+            PrintJob.printer_id == _norm_printer_id(printer_id),
+            PrintJob.employee_id == _emp(employee_id),
+            PrintJob.gcode_path == gcode_key_or_path,
+            PrintJob.uploaded_at >= cutoff,
+            PrintJob.status.in_(("queued", "processing", "paused")),
+        )
+        .order_by(PrintJob.uploaded_at.desc(), PrintJob.id.desc())
+        .first()
+    )
+
+def _get_cached_idem_job(db: Session, key: Optional[str]) -> Optional[PrintJob]:
+    if not key:
+        return None
+    with _IDEMP_LOCK:
+        rec = _IDEMP_CACHE.get(key)
+        if not rec:
+            return None
+        ts, jid = rec
+        if time.time() - ts > QUEUE_IDEMP_TTL_SEC:
+            _IDEMP_CACHE.pop(key, None)
+            return None
+    job = db.query(PrintJob).filter(PrintJob.id == jid).first()
+    if job and job.status in {"queued", "processing", "paused"}:
+        return job
+    return None
+
+def _cache_idem_job(key: Optional[str], job_id: int) -> None:
+    if not key:
+        return
+    with _IDEMP_LOCK:
+        _IDEMP_CACHE[key] = (time.time(), job_id)
+
+# --------------------------- OctoPrint settings/ops --------------------------
 def _octo_headers() -> dict:
-    return {"X-Api-Key": OCTO_KEY} if OCTO_KEY else {}
+    if OCTO_KEY:
+        return {"X-Api-Key": OCTO_KEY, "User-Agent": "ADI-3DP-Backend/Queue"}
+    return {"User-Agent": "ADI-3DP-Backend/Queue"}
 
 def _safe_filename(name: str) -> str:
     n = re.sub(r"[^\w.\-]+", "_", name or "job.gcode")
@@ -321,73 +756,137 @@ def _safe_filename(name: str) -> str:
     return n
 
 async def _download_bytes(src: str) -> bytes:
-    s = (src or "").strip()
-    if not s:
-        raise RuntimeError("empty_source")
     async with httpx.AsyncClient(timeout=OCTO_TIMEOUT, follow_redirects=True) as client:
+        s = (src or "").strip()
+        if not s:
+            raise RuntimeError("empty_source")
         if s.startswith(("storage/", "catalog/", "staging/", "printer-store/")):
             url = presign_get(s)
-            r = await client.get(url)
-            r.raise_for_status()
+            r = await client.get(url); r.raise_for_status()
             return r.content
         if s.startswith("/uploads/"):
             if not PUBLIC_BASE_URL:
                 raise RuntimeError("PUBLIC_BASE_URL_not_set")
             url = f"{PUBLIC_BASE_URL}{s}"
-            r = await client.get(url)
-            r.raise_for_status()
+            r = await client.get(url); r.raise_for_status()
             return r.content
         if s.startswith(("http://", "https://")):
-            r = await client.get(s)
-            r.raise_for_status()
+            r = await client.get(s); r.raise_for_status()
             return r.content
         if os.path.exists(s):
             with open(s, "rb") as f:
                 return f.read()
         try:
             url = presign_get(s)
-            r = await client.get(url)
-            r.raise_for_status()
+            r = await client.get(url); r.raise_for_status()
             return r.content
         except Exception:
             pass
         raise RuntimeError(f"unsupported_source:{src}")
 
-async def _dispatch_to_octoprint(job: PrintJob) -> None:
+def _octo_is_ready() -> bool:
+    if not (OCTO_BASE and OCTO_KEY):
+        # ไม่มี config → ถือว่า “พร้อม” เพื่อให้ flow dev ไปต่อได้
+        return True
+    url = f"{OCTO_BASE}/api/printer"
+    try:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as c:
+            r = c.get(url, headers=_octo_headers())
+            if r.status_code >= 300:
+                return False
+            js = r.json() or {}
+            flags = ((js.get("state") or {}).get("flags") or {})
+            busy = any(bool(flags.get(k)) for k in ("printing", "paused", "pausing", "cancelling"))
+            return not busy
+    except Exception:
+        return False
+
+async def _dispatch_to_octoprint(db: Session, job: PrintJob, tasks: Optional[BackgroundTasks] = None) -> None:
     if not (OCTO_BASE and OCTO_KEY):
         logger.warning("OctoPrint not configured (base/key missing), skip dispatch")
         return
+
     src = (getattr(job, "gcode_path", "") or getattr(job, "gcode_key", "") or "").strip()
     if not src:
         logger.error("Job %s has no gcode source (gcode_path/key is empty)", job.id)
         return
+
     filename = _safe_filename(os.path.basename(src) or f"job_{job.id}.gcode")
     try:
-        logger.info("Dispatch job %s to OctoPrint | src=%s", job.id, src)
         file_bytes = await _download_bytes(src)
-        files = {"file": (filename, file_bytes, _guess_ct(filename))}
-        qs = urlencode({"select": "true", "print": "true"})
-        url = f"{OCTO_BASE}/api/files/local?{qs}"
-        async with httpx.AsyncClient(timeout=OCTO_TIMEOUT) as client2:
-            up = await client2.post(url, headers=_octo_headers(), files=files)
-        if up.status_code >= 300:
-            logger.error("Octo upload failed %s: %s", up.status_code, up.text)
-            raise RuntimeError(f"octoprint_upload_failed:{up.status_code}")
-        logger.info("OctoPrint: uploaded & started %s", filename)
-    except Exception as e:
-        logger.exception("OctoPrint push failed for job %s: %s", job.id, e)
-        raise
+    except Exception:
+        logger.exception("Download gcode failed for job %s", job.id)
+        job.status = "failed"
+        job.finished_at = datetime.utcnow()
+        db.add(job); db.commit(); db.refresh(job)
+        evf = _format_event(
+            type="print.failed",
+            printer_id=job.printer_id,
+            data={"name": job.name, "job_id": int(job.id), "reason": "download_failed"},
+        )
+        _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, evf)
+        return
 
-# ---------- RUNMAP binder (local-first, HTTP fallback) ----------
+    files = {"file": (filename, file_bytes, _guess_ct(filename))}
+    qs = urlencode({"select": "true", "print": "true"})
+    url = f"{OCTO_BASE}/api/files/local?{qs}"
 
+    delays = [0.0, 2.0, 4.0, 8.0]
+    last_err = None
+
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+
+        if not _octo_is_ready():
+            logger.info("Octo not ready (attempt %s), waiting 2s", attempt)
+            await asyncio.sleep(2.0)
+
+        try:
+            async with httpx.AsyncClient(timeout=OCTO_TIMEOUT) as client2:
+                up = await client2.post(url, headers=_octo_headers(), files=files)
+            sc = up.status_code
+            if sc < 300:
+                logger.info("OctoPrint: uploaded & started %s (attempt %s)", filename, attempt)
+                evs = _format_event(
+                    type="print.started",
+                    printer_id=job.printer_id,
+                    data={"name": job.name, "job_id": int(job.id)},
+                )
+                _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, evs)
+                return
+
+            body = (up.text or "")[:300]
+            logger.warning("Octo upload attempt %s failed %s: %s", attempt, sc, body)
+            if sc in (409, 423, 429) or (500 <= sc < 600):
+                last_err = RuntimeError(f"octoprint_upload_failed:{sc}")
+                continue
+            up.raise_for_status()
+
+        except Exception as e:
+            last_err = e
+            logger.exception("Octo push exception (attempt %s): %s", attempt, e)
+
+    if last_err:
+        logger.error("OctoPrint push failed after retries for job %s", job.id)
+        job.status = "failed"
+        job.finished_at = datetime.utcnow()
+        db.add(job); db.commit(); db.refresh(job)
+        evf = _format_event(
+            type="print.failed",
+            printer_id=job.printer_id,
+            data={"name": job.name, "job_id": int(job.id), "reason": "octoprint_unreachable"},
+        )
+        _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, evf)
+        return
+
+# -------------------------- RUNMAP binder ------------------------------------
 def _bind_runmap_remote(printer_id: str, job: PrintJob, *, octo_user: str | None = None) -> None:
-    """
-    ผูก job_id ↔ รอบพิมพ์ปัจจุบัน:
-      1) ลองเรียกฟังก์ชันภายในโปรเซส (local) ก่อน
-      2) ถ้าไม่สำเร็จค่อย fallback ยิง HTTP (timeout สั้น)
-    """
     try:
-        from printer_status import _bind_runmap as _bind_runmap_core  # type: ignore
+        try:
+            from printer_status import _bind_runmap as _bind_runmap_core  # type: ignore
+        except Exception:
+            from backend.printer_status import _bind_runmap as _bind_runmap_core  # type: ignore
         _bind_runmap_core(
             printer_id,
             job_id=int(job.id),
@@ -418,25 +917,22 @@ def _bind_runmap_remote(printer_id: str, job: PrintJob, *, octo_user: str | None
     except Exception:
         logger.exception("[RUNMAP] bind HTTP failed")
 
-# ---------- notifier (local async-first) ----------
-
+# -------------------------- notifier (async-first) ---------------------------
 def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name: str | None):
-    """
-    สร้าง task ที่จะเรียก printer_status._notify_job_event แบบ async ภายในโปรเซส
-    ถ้าหาไม่ได้จะ fallback ยิง HTTP ด้วย timeout สั้น
-    """
     async def _run():
         try:
-            from printer_status import _notify_job_event as _notify_local  # type: ignore
-            # local async call
+            try:
+                from printer_status import _notify_job_event as _notify_local  # type: ignore
+            except Exception:
+                from backend.printer_status import _notify_job_event as _notify_local  # type: ignore
             asyncio.create_task(_notify_local(job_id, status_out, printer_id=printer_id, name=name))
             logger.info("[QUEUE] notify job-event (local) %s #%s", status_out, job_id)
             return
         except Exception:
             logger.exception("[QUEUE] notify local not available, fallback HTTP")
         try:
-            base = (os.getenv("BACKEND_INTERNAL_BASE") or "http://127.0.0.1:8001").rstrip("/")
-            admin = os.getenv("ADMIN_TOKEN") or ""
+            base = BACKEND_INTERNAL_BASE
+            admin = ADMIN_TOKEN
             url = f"{base}/notifications/job-event"
             headers = {"X-Admin-Token": admin, "Content-Type": "application/json"}
             payload = {"job_id": job_id, "status": status_out, "printer_id": printer_id, "name": name}
@@ -446,14 +942,10 @@ def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name:
                 logger.info("[QUEUE] notify job-event (HTTP) %s → %s", status_out, r.status_code)
         except Exception:
             logger.exception("[QUEUE] notify job-event (HTTP) failed")
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_run())
-    except RuntimeError:
-        asyncio.run(_run())
 
-# ---------- start-next helper ----------
+    _bgcall(_run)
 
+# -------------------------- queue flow helpers -------------------------------
 def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[BackgroundTasks] = None) -> Optional[PrintJob]:
     printer_id = _norm_printer_id(printer_id)
 
@@ -480,23 +972,10 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
 
     _bind_runmap_remote(printer_id, next_job)
 
-    _submit_bg(
-        tasks,
-        notify_user,
-        db, next_job.employee_id,
-        type="print.started",
-        severity="info",
-        title="ถึงคิวพิมพ์ของคุณแล้ว",
-        message=next_job.name,
-        data={"job_id": next_job.id, "printer_id": next_job.printer_id},
-    )
-
-    _submit_bg(tasks, _dispatch_to_octoprint, next_job)
-
+    _submit_bg(tasks, _dispatch_to_octoprint, db, next_job, tasks)
     return next_job
 
-# ---------- คำนวณเวลาคิว/เวลาที่เหลือ ----------
-
+# -------------------------- time computation ---------------------------------
 def _compute_times(rows: List[PrintJob]) -> Dict[int, Tuple[int, int, int]]:
     now = datetime.utcnow()
     result: Dict[int, Tuple[int, int, int]] = {}
@@ -514,11 +993,18 @@ def _compute_times(rows: List[PrintJob]) -> Dict[int, Tuple[int, int, int]]:
         cumulative += remaining
     return result
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
 # core enqueue
-# ---------------------------------------------------------------------------
-
-def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id: str, tasks: Optional[BackgroundTasks] = None) -> PrintJobOut:
+# -----------------------------------------------------------------------------#
+def _enqueue_job(
+    db: Session,
+    current: User,
+    payload: PrintJobCreate,
+    printer_id: str,
+    tasks: Optional[BackgroundTasks] = None,
+    *,
+    idempotency_key: Optional[str] = None,
+) -> PrintJobOut:
     printer_id = _norm_printer_id(printer_id)
     _get_or_create_printer(db, printer_id)
 
@@ -526,6 +1012,8 @@ def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id
     gcode_key_in  = getattr(payload, "gcode_key", None)
     gcode_path_in = getattr(payload, "gcode_path", None)
     name = payload.name
+
+    model_for_catalog = _derive_model_for_finalize(printer_id, payload)
 
     gcode_src_in = gcode_path_in or gcode_key_in
     same_key = bool(original_key_in and gcode_src_in and original_key_in == gcode_src_in)
@@ -536,6 +1024,8 @@ def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id
             original_key_in,
             display_name=name or original_key_in,
             want_record=False,
+            model_for_catalog=model_for_catalog,
+            user=current,
         )
 
     gcode_final = None
@@ -545,21 +1035,57 @@ def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id
             gcode_src_in,
             display_name=name or gcode_src_in,
             want_record=True,
+            model_for_catalog=model_for_catalog,
+            user=current,
         )
 
     db.commit()
 
-    job = PrintJob(
+    gk = (gcode_final or gcode_path_in or gcode_key_in)
+    pkey = _preview_key_for(gk) if gk else None
+    job_thumb = payload.thumb or pkey
+
+    if AUTO_PREVIEW_ON_ENQUEUE and gk:
+        def _bg_render():
+            try:
+                ensure_preview_once(gk)
+            except Exception:
+                logger.exception("background preview render failed for %s", gk)
+        _submit_bg(tasks, _bg_render)
+
+    owner_emp = _resolve_owner_by_gkey(db, gk, _emp(current.employee_id))
+    requester_emp = _emp(current.employee_id)
+
+    idem_key = _make_idem_key(printer_id, owner_emp, gk, idempotency_key)
+
+    cached = _get_cached_idem_job(db, idem_key)
+    if cached:
+        logger.info("enqueue idempotent-hit (cache): printer=%s emp=%s gk=%s -> job_id=%s",
+                    printer_id, owner_emp, gk, cached.id)
+        return _to_out(db, current, cached)
+
+    dup = _find_recent_duplicate_job(db, printer_id, owner_emp, gk)
+    if dup:
+        _cache_idem_job(idem_key, dup.id)
+        logger.info("enqueue idempotent-hit (db): printer=%s emp=%s gk=%s -> job_id=%s",
+            printer_id, owner_emp, gk, dup.id)
+        return _to_out(db, current, dup)
+
+    job_kwargs = dict(
         printer_id=printer_id,
-        employee_id=_emp(current.employee_id),
+        employee_id=owner_emp,
         name=name,
-        thumb=payload.thumb,
+        thumb=job_thumb,
         time_min=payload.time_min,
-        source=payload.source,
-        gcode_path=gcode_final or gcode_path_in or gcode_key_in,
+        source=(payload.source or "storage"),
+        gcode_path=gk,
         status="queued",
         uploaded_at=datetime.utcnow(),
     )
+    if hasattr(PrintJob, "requested_by_employee_id"):
+        job_kwargs["requested_by_employee_id"] = requester_emp
+
+    job = PrintJob(**job_kwargs)
 
     try:
         if hasattr(job, "template_json") and getattr(payload, "template", None) is not None:
@@ -578,93 +1104,51 @@ def _enqueue_job(db: Session, current: User, payload: PrintJobCreate, printer_id
         logger.exception("serialize file_json failed")
 
     db.add(job); db.commit(); db.refresh(job)
+    _cache_idem_job(idem_key, job.id)
 
-    # ไม่ auto-start เมื่อ enqueue — ให้ฝั่ง printer_status ตัดสิน
+    evq = _format_event(
+        type="print.queued",
+        printer_id=printer_id,
+        data={"name": job.name, "job_id": int(job.id)},
+    )
+    _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, evq)
+
+    if AUTO_START_ON_ENQUEUE:
+        _start_next_job_if_idle(db, printer_id, tasks)
+
+    db.refresh(job)
     return _to_out(db, current, job)
 
-# ---------------------------------------------------------------------------
-# duplicate guard helpers
-# ---------------------------------------------------------------------------
-
-def _find_recent_duplicate(db: Session, *, employee_id: str, printer_id: str, gcode_path: str, window_sec: int) -> Optional[PrintJob]:
-    """
-    มองหางาน 'queued' ที่เพิ่งสร้าง (ภายใน window_sec) ของคนเดิม + เครื่องเดิม + gcode เดิม
-    """
-    if not (employee_id and printer_id and gcode_path):
-        return None
-    since = datetime.utcnow() - timedelta(seconds=window_sec)
-    return (
-        db.query(PrintJob)
-          .filter(
-              PrintJob.employee_id == _emp(employee_id),
-              PrintJob.printer_id == _norm_printer_id(printer_id),
-              PrintJob.status == "queued",
-              PrintJob.uploaded_at >= since,
-              PrintJob.gcode_path == gcode_path,
-          )
-          .order_by(PrintJob.uploaded_at.desc(), PrintJob.id.desc())
-          .first()
-    )
-
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
 # create
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
 @router.post("/api/print", response_model=PrintJobOut)
 def create_print(
     payload: PrintJobCreate,
+    background_tasks: BackgroundTasks,
     printer_id: Optional[str] = None,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
-    idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: Optional[str] = Header(None),
 ):
     pid = _norm_printer_id(printer_id or DEFAULT_PRINTER_ID)
-
-    # ---- duplicate guard (120s ถ้ามี Idempotency-Key, ไม่งั้น 60s) ----
-    gpath = (payload.gcode_path or payload.gcode_key or "").strip()
-    if gpath:
-        win = 3
-        dup = _find_recent_duplicate(db,
-            employee_id=_emp(current.employee_id),
-            printer_id=pid,
-            gcode_path=gpath,
-            window_sec=win,
-        )
-        if dup:
-            return _to_out(db, current, dup)
-
-    return _enqueue_job(db, current, payload, pid, background_tasks)
+    return _enqueue_job(db, current, payload, pid, background_tasks, idempotency_key=idempotency_key)
 
 @router.post("/printers/{printer_id}/queue", response_model=PrintJobOut)
 def enqueue_for_printer(
     printer_id: str,
     payload: PrintJobCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
-    idem_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: Optional[str] = Header(None),
 ):
     pid = _norm_printer_id(printer_id)
+    return _enqueue_job(db, current, payload, pid, background_tasks, idempotency_key=idempotency_key)
 
-    gpath = (payload.gcode_path or payload.gcode_key or "").strip()
-    if gpath:
-        win = 3
-        dup = _find_recent_duplicate(db,
-            employee_id=_emp(current.employee_id),
-            printer_id=pid,
-            gcode_path=gpath,
-            window_sec=win,
-        )
-        if dup:
-            return _to_out(db, current, dup)
-
-    return _enqueue_job(db, current, payload, pid, background_tasks)
-
-# ---------------------------------------------------------------------------
-# list
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
+# list (รองรับ optional user + X-Admin-Token)
+# -----------------------------------------------------------------------------#
 @router.get("/printers/{printer_id}/queue", response_model=QueueListOut)
 def list_queue(
     printer_id: str,
@@ -673,7 +1157,7 @@ def list_queue(
     current: Optional[User] = Depends(get_optional_user),
     x_admin_token: str = Header(default=""),
 ):
-    is_admin = bool(ADMIN_TOKEN and x_admin_token and x_admin_token == ADMIN_TOKEN)
+    is_admin = bool(ALLOW_ADMIN_HEADER and ADMIN_TOKEN and x_admin_token and x_admin_token == ADMIN_TOKEN)
     if not (current or is_admin):
         raise HTTPException(401, "Not authenticated")
 
@@ -691,7 +1175,6 @@ def list_queue(
         q = q.filter(PrintJob.status.in_(("queued", "processing", "paused", "printing")))
 
     rows: List[PrintJob] = q.order_by(status_order_expr(), PrintJob.uploaded_at.asc(), PrintJob.id.asc()).all()
-
     times = _compute_times(rows)
     name_map = _decorate_employee_name(db, rows)
 
@@ -703,22 +1186,21 @@ def list_queue(
         o.wait_total_min  = wt
         o.remaining_min   = rem
         items.append(o)
-
     return QueueListOut(printer_id=pid, items=items)
 
-# ---------------------------------------------------------------------------
-# current job
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
+# current job (มี fallback ไปสอบถาม OctoPrint)
+# -----------------------------------------------------------------------------#
 @router.get("/api/printers/{printer_id}/current-job", response_model=CurrentJobOut)
 def current_job_for_printer(
     printer_id: str,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
+    pid = _norm_printer_id(printer_id)
     rows: List[PrintJob] = (
         db.query(PrintJob)
-          .filter(PrintJob.printer_id == printer_id)
+          .filter(PrintJob.printer_id == pid)
           .order_by(status_order_expr(), PrintJob.uploaded_at.asc(), PrintJob.id.asc())
           .all()
     )
@@ -745,13 +1227,22 @@ def current_job_for_printer(
                 time_min=cur.time_min,
                 remaining_min=remaining,
             )
-    # Fallback: DB ไม่มี แต่อุปกรณ์กำลังพิมพ์อยู่
+
     try:
         with httpx.Client(timeout=6.0) as c:
-            r = c.get(f"{BACKEND_INTERNAL_BASE}/printers/{printer_id}/octoprint/job", params={"force": "true"})
+            r = c.get(f"{BACKEND_INTERNAL_BASE}/printers/{pid}/octoprint/job", params={"force": "true"})
         if r.status_code == 200:
-            m = (r.json().get("mapped") or {})
-            if (m.get("state") or "").lower() == "printing":
+            js = r.json()
+            m = (js.get("mapped") or {})
+            state = (m.get("state") or "").lower()
+            if state == "printing":
+                file_name = m.get("file_name") or m.get("file")
+                if not file_name:
+                    try:
+                        file = (((js.get("octoprint") or {}).get("job") or {}).get("file") or {})
+                        file_name = file.get("display") or file.get("name") or "(Printing)"
+                    except Exception:
+                        file_name = "(Printing)"
                 sec_left = m.get("time_left") or m.get("timeLeft") or 0
                 try:
                     remaining_min = max(int(float(sec_left) // 60), 0)
@@ -759,9 +1250,9 @@ def current_job_for_printer(
                     remaining_min = None
                 return CurrentJobOut(
                     queue_number=1,
-                    file_name=m.get("file_name") or m.get("file") or "(Printing)",
+                    file_name=file_name,
                     thumbnail_url="/images/placeholder-model.png",
-                    job_id=0,  # pseudo
+                    job_id=0,
                     status="processing",
                     started_at=None,
                     time_min=None,
@@ -771,17 +1262,16 @@ def current_job_for_printer(
         pass
     raise HTTPException(404, "No active job")
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
 # patch (rename / change status)
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
 @router.patch("/printers/jobs/{job_id}", response_model=PrintJobOut)
 def patch_job(
     job_id: int,
     payload: PrintJobPatch,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
 ):
     job = db.query(PrintJob).filter(PrintJob.id == job_id).first()
     if not job:
@@ -801,16 +1291,7 @@ def patch_job(
             if job.started_at is None:
                 job.started_at = now
             _bind_runmap_remote(job.printer_id, job)
-            _submit_bg(
-                background_tasks,
-                notify_user,
-                db, job.employee_id,
-                type="print.started",
-                severity="info",
-                title="ถึงคิวพิมพ์ของคุณแล้ว",
-                message=job.name,
-                data={"job_id": job.id, "printer_id": job.printer_id},
-            )
+            # ยิง started เมื่อ upload สำเร็จใน _dispatch_to_octoprint
 
         if s in ("completed", "failed", "canceled"):
             job.finished_at = now
@@ -821,82 +1302,97 @@ def patch_job(
             status_out = "cancelled" if s == "canceled" else s
             _notify_job_event_async(job.id, status_out, job.printer_id, job.name)
 
+            ev2 = _format_event(
+                type=f"print.{ 'canceled' if s=='canceled' else s }",
+                printer_id=job.printer_id,
+                data={"name": job.name, "job_id": int(job.id)},
+            )
+            _submit_bg(background_tasks, _emit_event_all_channels, db, job.employee_id, ev2)
+
     db.add(job); db.commit(); db.refresh(job)
     return _to_out(db, current, job)
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
 # cancel (รวมจุดใช้งาน)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
+def _poll_octoprint_ready_and_chain(db: Session, printer_id: str, max_wait_sec: float = 30.0, interval: float = 2.0):
+    t0 = time.time()
+    while (time.time() - t0) < max_wait_sec:
+        if _octo_is_ready():
+            _start_next_job_if_idle(db, printer_id, None)
+            return
+        try:
+            time.sleep(interval)
+        except Exception:
+            break
+    _start_next_job_if_idle(db, printer_id, None)
 
 def _cancel_job_instance(db: Session, job: Optional[PrintJob], current: User, tasks: Optional[BackgroundTasks] = None) -> PrintJobOut:
     if not job:
         raise HTTPException(404, "Job not found")
+
     if job.status in {"completed", "failed", "canceled"}:
         raise HTTPException(409, f"status_not_cancelable:{job.status}")
+
     ok, reason = _can_cancel_with_reason(current, job)
     if not ok:
         raise HTTPException(403, f"Forbidden:{reason}")
+
+    was_processing = (job.status == "processing")
+
     job.status = "canceled"
     job.finished_at = datetime.utcnow()
     db.add(job); db.commit(); db.refresh(job)
-    _submit_bg(
-        tasks,
-        notify_user,
-        db, job.employee_id,
+
+    ev = _format_event(
         type="print.canceled",
-        title="ยกเลิกงานพิมพ์",
-        message=job.name,
-        severity="info",
-        data={"job_id": job.id},
+        printer_id=job.printer_id,
+        data={"name": job.name, "job_id": int(job.id)},
     )
+    _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, ev)
+
+    if was_processing:
+        _submit_bg(tasks, _poll_octoprint_ready_and_chain, db, job.printer_id, 30.0)
+    else:
+        _start_next_job_if_idle(db, job.printer_id, tasks)
+
     return _to_out(db, current, job)
 
 @router.post("/printers/jobs/{job_id}/cancel", response_model=PrintJobOut)
 def cancel_job(
     job_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
 ):
     job = db.query(PrintJob).filter(PrintJob.id == job_id).first()
     return _cancel_job_instance(db, job, current, background_tasks)
 
 @router.post("/printers/{printer_id}/queue/{job_id}/cancel", response_model=PrintJobOut)
 def cancel_job_alias_post(
-    printer_id: str,
-    job_id: int,
+    printer_id: str, job_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
 ):
     pid = _norm_printer_id(printer_id)
-    job = (
-        db.query(PrintJob)
-          .filter(PrintJob.id == job_id, PrintJob.printer_id == pid)
-          .first()
-    )
+    job = db.query(PrintJob).filter(PrintJob.id == job_id, PrintJob.printer_id == pid).first()
     return _cancel_job_instance(db, job, current, background_tasks)
 
 @router.delete("/printers/{printer_id}/queue/{job_id}", response_model=PrintJobOut)
 def cancel_job_alias_delete(
-    printer_id: str,
-    job_id: int,
+    printer_id: str, job_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
 ):
     pid = _norm_printer_id(printer_id)
-    job = (
-        db.query(PrintJob)
-          .filter(PrintJob.id == job_id, PrintJob.printer_id == pid)
-          .first()
-    )
+    job = db.query(PrintJob).filter(PrintJob.id == job_id, PrintJob.printer_id == pid).first()
     return _cancel_job_instance(db, job, current, background_tasks)
 
-# ---------------------------------------------------------------------------
-# pause / resume (ระดับเครื่อง)
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
+# pause / resume (per printer)
+# -----------------------------------------------------------------------------#
 @router.post("/api/printers/{printer_id}/pause")
 def pause_current(
     printer_id: str,
@@ -912,6 +1408,7 @@ def pause_current(
         raise HTTPException(404, "No processing job")
     if not _owner_or_manager(current, job):
         raise HTTPException(403, "Forbidden")
+
     job.status = "paused"
     db.add(job); db.commit(); db.refresh(job)
     return {"ok": True, "jobId": job.id, "status": job.status}
@@ -919,9 +1416,9 @@ def pause_current(
 @router.post("/api/printers/{printer_id}/resume")
 def resume_next(
     printer_id: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current: User = Depends(get_confirmed_user),
-    background_tasks: BackgroundTasks = None,
 ):
     pid = _norm_printer_id(printer_id)
     job = (db.query(PrintJob)
@@ -933,40 +1430,35 @@ def resume_next(
     if not _owner_or_manager(current, job):
         raise HTTPException(403, "Forbidden")
 
-    now = datetime.utcnow()
-    job.status = "processing"              # <<<< เดิมเป็น "queued"
-    if not job.started_at:
-        job.started_at = now
-    db.add(job); db.commit(); db.refresh(job)
+    if RESUME_DIRECT_PROCESSING:
+        now = datetime.utcnow()
+        job.status = "processing"
+        if not job.started_at:
+            job.started_at = now
+        db.add(job); db.commit(); db.refresh(job)
 
-    # ผูก runmap ให้ฝั่ง printer_status หา active ได้
-    _bind_runmap_remote(pid, job)
+        _bind_runmap_remote(pid, job)
+        return {"ok": True, "jobId": job.id, "status": job.status}
+    else:
+        job.status = "queued"
+        db.add(job); db.commit(); db.refresh(job)
+        _start_next_job_if_idle(db, pid, background_tasks)
+        return {"ok": True, "jobId": job.id, "status": job.status}
 
-    # (ถ้าต้องการ) แจ้งเจ้าของงานว่าเริ่มต่อแล้ว
-    _submit_bg(
-        background_tasks,
-        notify_user,
-        db, job.employee_id,
-        type="print.started",
-        severity="info",
-        title="กลับมาพิมพ์ต่อแล้ว",
-        message=job.name,
-        data={"job_id": job.id, "printer_id": job.printer_id},
-    )
-
-    return {"ok": True, "jobId": job.id, "status": job.status}
-
-# ---------------------------------------------------------------------------
-# internal: process-next
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
+# internal: process-next (ต้องมี X-Admin-Token)
+# -----------------------------------------------------------------------------#
+def _check_admin_token(token: str):
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 @router.post("/internal/printers/{printer_id}/queue/process-next")
 def internal_process_next(
     printer_id: str,
+    background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks = None,
-    x_admin_token: str = Header(default="")
+    x_admin_token: str = Header(default=""),
 ):
     _check_admin_token(x_admin_token)
     pid = _norm_printer_id(printer_id)
@@ -982,6 +1474,13 @@ def internal_process_next(
             has_processing.finished_at = datetime.utcnow()
             db.add(has_processing); db.commit(); db.refresh(has_processing)
             _notify_job_event_async(has_processing.id, "completed", pid, has_processing.name)
+
+            ev = _format_event(
+                type="print.completed",
+                printer_id=pid,
+                data={"name": has_processing.name, "job_id": int(has_processing.id)},
+            )
+            _submit_bg(background_tasks, _emit_event_all_channels, db, has_processing.employee_id, ev)
         else:
             pr_state = ""
             pr_progress = 0.0
@@ -998,13 +1497,18 @@ def internal_process_next(
                             pr_progress = 0.0
             except Exception:
                 pr_state = ""
-                pr_progress = 0.0
-
             if (pr_state and pr_state not in {"printing"}) or pr_progress >= 99.5:
                 has_processing.status = "completed"
                 has_processing.finished_at = datetime.utcnow()
                 db.add(has_processing); db.commit(); db.refresh(has_processing)
                 _notify_job_event_async(has_processing.id, "completed", pid, has_processing.name)
+
+                ev = _format_event(
+                    type="print.completed",
+                    printer_id=pid,
+                    data={"name": has_processing.name, "job_id": int(has_processing.id)},
+                )
+                _submit_bg(background_tasks, _emit_event_all_channels, db, has_processing.employee_id, ev)
             else:
                 return {"ok": True, "message": "already-processing", "state": pr_state, "progress": pr_progress}
 
@@ -1013,10 +1517,9 @@ def internal_process_next(
         return {"ok": True, "message": "no-job"}
     return {"ok": True, "message": "started", "jobId": job.id}
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------#
 # reorder (only manager)
-# ---------------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------#
 @router.post("/printers/{printer_id}/queue/reorder")
 def reorder_queue(
     printer_id: str,
@@ -1027,13 +1530,34 @@ def reorder_queue(
     pid = _norm_printer_id(printer_id)
     if not payload.job_ids:
         return {"ok": True, "updated": 0}
+
+    rows: List[PrintJob] = (
+        db.query(PrintJob)
+        .filter(PrintJob.printer_id == pid, PrintJob.id.in_(payload.job_ids))
+        .all()
+    )
+    if not rows:
+        return {"ok": True, "updated": 0}
+
+    if any(j.status == "processing" for j in rows):
+        raise HTTPException(
+            status_code=409,
+            detail="reorder_requires_pause_or_cancel_processing",
+        )
+
+    movable = {j.id: j for j in rows if j.status in {"queued", "paused"}}
+    if not movable:
+        return {"ok": True, "updated": 0}
+
     base = datetime.utcnow()
     updated = 0
     for i, jid in enumerate(payload.job_ids):
-        job = db.query(PrintJob).filter(PrintJob.id == jid, PrintJob.printer_id == pid).first()
-        if not job:
+        j = movable.get(jid)
+        if not j:
             continue
-        job.uploaded_at = base + timedelta(seconds=i)
-        db.add(job); updated += 1
+        j.uploaded_at = base + timedelta(seconds=i)
+        db.add(j)
+        updated += 1
+
     db.commit()
     return {"ok": True, "updated": updated}
