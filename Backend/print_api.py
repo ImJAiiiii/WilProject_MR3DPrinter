@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import httpx
 from tempfile import SpooledTemporaryFile
 from typing import Optional, Dict, Any, Tuple
@@ -12,7 +13,14 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from auth import get_confirmed_user
-from models import User
+from models import User, Printer, PrintJob
+
+# พยายามใช้ helper แจ้งเตือนแบบรวมศูนย์; ถ้ายังไม่มี ให้ทำเป็น no-op
+try:
+    from notifications import notify_job_event  # ใช้ยิงแจ้งเตือนสถานะ
+except Exception:
+    async def notify_job_event(*args, **kwargs):
+        return
 
 # ===== Helpers for env =====
 def _clean_env(v: Optional[str]) -> str:
@@ -34,6 +42,9 @@ def _as_bool(v, default=False) -> bool:
 OCTO_BASE = _clean_env(os.getenv("OCTOPRINT_BASE")).rstrip("/")
 OCTO_KEY = _clean_env(os.getenv("OCTOPRINT_API_KEY"))
 OCTO_TIMEOUT = _parse_timeout()
+
+# ===== App config =====
+DEFAULT_PRINTER_ID = _clean_env(os.getenv("DEFAULT_PRINTER_ID") or "prusa-core-one")
 
 # ===== Policy =====
 PRINT_MAX_MB = int(os.getenv("PRINT_MAX_MB", "200"))                 # hard limit (MB)
@@ -137,6 +148,43 @@ async def _upload_to_octoprint(file_tuple, *, location: str, select: bool, auto_
             raise HTTPException(res.status_code, f"OctoPrint: {payload.get('error') or payload.get('detail') or res.text}")
         return payload
 
+def _ensure_printer(db: Session, printer_id: Optional[str]) -> str:
+    pid = (printer_id or DEFAULT_PRINTER_ID or "default-printer").strip()
+    p = db.query(Printer).filter(Printer.id == pid).first()
+    if not p:
+        p = Printer(id=pid, display_name=pid, state="ready", status_text="Printer is ready", busy=False)
+        db.add(p)
+        db.commit()
+    return pid
+
+def _create_job_record(
+    db: Session,
+    *,
+    printer_id: str,
+    me: User,
+    safe_name: str,
+    source: str,
+    started: bool,
+    file_url: Optional[str],
+    size_bytes: Optional[int]
+) -> PrintJob:
+    status = "processing" if started else "queued"
+    job = PrintJob(
+        printer_id=printer_id,
+        employee_id=me.employee_id,                 # เจ้าของงาน (โหมดลัดถือว่าเป็นคนกดเอง)
+        requested_by_employee_id=me.employee_id,    # ผู้กดพิมพ์
+        name=safe_name,
+        source=source,
+        status=status,
+        gcode_path=file_url,
+        file_json=None if (file_url is None and size_bytes is None) else
+            json.dumps({"file_url": file_url, "size_bytes": size_bytes}, ensure_ascii=False),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
 @router.post("/print-now")
 async def print_now(
     # Which printer (informational for multi-printer setup)
@@ -174,6 +222,9 @@ async def print_now(
     total: Optional[int] = None
     safe_name = None
 
+    # ให้มั่นใจว่า printer อยู่ใน DB
+    printer_id_final = _ensure_printer(db, printer_id)
+
     try:
         if file is not None:
             # --- Direct upload ---
@@ -197,6 +248,21 @@ async def print_now(
                 select=select_flag,
                 auto_print=print_flag,
             )
+            # บันทึกงาน + แจ้งเตือน
+            job = _create_job_record(
+                db,
+                printer_id=printer_id_final,
+                me=me,
+                safe_name=safe_name,
+                source="upload",
+                started=print_flag,
+                file_url=None,
+                size_bytes=total,
+            )
+            try:
+                await notify_job_event(db, job, "processing" if print_flag else "queued")
+            except Exception:
+                pass
 
         elif file_url:
             # --- Download from URL, then upload to OctoPrint ---
@@ -210,13 +276,28 @@ async def print_now(
                 select=select_flag,
                 auto_print=print_flag,
             )
+            # บันทึกงาน + แจ้งเตือน
+            job = _create_job_record(
+                db,
+                printer_id=printer_id_final,
+                me=me,
+                safe_name=safe_name,
+                source="url",
+                started=print_flag,
+                file_url=file_url,
+                size_bytes=total,
+            )
+            try:
+                await notify_job_event(db, job, "processing" if print_flag else "queued")
+            except Exception:
+                pass
 
         else:
             raise HTTPException(422, "Need file (upload) or file_url")
 
         return {
             "ok": True,
-            "printer_id": printer_id,
+            "printer_id": printer_id_final,
             "location": location,
             "selected": select_flag,
             "started": print_flag,
@@ -237,12 +318,58 @@ async def print_now(
                     detail += f" - {msg}"
         except Exception:
             pass
+        # แจ้งล้มเหลว
+        try:
+            # ถ้ามี safe_name แล้ว ลองบันทึก job เพื่อเก็บร่องรอยความผิดพลาด
+            job = _create_job_record(
+                db,
+                printer_id=printer_id_final,
+                me=me,
+                safe_name=safe_name or "job.gcode",
+                source="upload" if file is not None else "url",
+                started=False,
+                file_url=file_url,
+                size_bytes=total,
+            )
+            await notify_job_event(db, job, "failed")
+        except Exception:
+            pass
         raise HTTPException(e.response.status_code, detail)
 
     except HTTPException:
+        # แจ้งล้มเหลวแบบ generic
+        try:
+            job = _create_job_record(
+                db,
+                printer_id=printer_id_final,
+                me=me,
+                safe_name=safe_name or "job.gcode",
+                source="upload" if file is not None else ("url" if file_url else "upload"),
+                started=False,
+                file_url=file_url,
+                size_bytes=total,
+            )
+            await notify_job_event(db, job, "failed")
+        except Exception:
+            pass
         raise
 
     except Exception as e:
+        # แจ้งล้มเหลวแบบ generic
+        try:
+            job = _create_job_record(
+                db,
+                printer_id=printer_id_final,
+                me=me,
+                safe_name=safe_name or "job.gcode",
+                source="upload" if file is not None else ("url" if file_url else "upload"),
+                started=False,
+                file_url=file_url,
+                size_bytes=total,
+            )
+            await notify_job_event(db, job, "failed")
+        except Exception:
+            pass
         raise HTTPException(502, f"Create print failed: {e}")
 
     finally:
