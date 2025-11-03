@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query
+from fastapi import Request  # NEW: for reading headers (X-Reason)
 from sqlalchemy import case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -239,54 +240,42 @@ def _format_event(*,
     }
 
 async def _call_notify_user_async(db: Session, employee_id: str, ev: dict):
-    """รองรับทั้งสอง signature + ทั้ง sync/async implementation ของ notifications.notify_user"""
-    # เตรียม args ให้ลองทั้ง kwargs และ payload=ev
     async def _run_kwargs():
         res = notify_user(db, employee_id, **ev)
         if inspect.iscoroutine(res):
             return await res
         return res
-
     async def _run_payload():
         res = notify_user(db, employee_id, payload=ev)
         if inspect.iscoroutine(res):
             return await res
         return res
-
     try:
         return await _run_kwargs()
     except TypeError:
         return await _run_payload()
 
 async def _call_notify_job_event_async(db: Session, ev: dict):
-    """รองรับทั้งสอง signature + ทั้ง sync/async implementation ของ notifications.notify_job_event"""
     async def _run_kwargs():
         res = notify_job_event(db, ev, "canonical")
         if inspect.iscoroutine(res):
             return await res
         return res
-
     async def _run_payload():
         res = notify_job_event(db, payload=ev)
         if inspect.iscoroutine(res):
             return await res
         return res
-
     try:
         return await _run_kwargs()
     except TypeError:
         return await _run_payload()
 
 def _emit_event_all_channels(db: Session, employee_id: str, ev: dict):
-    """
-    ส่ง payload เดียวไปทุกปลายทาง (เว็บ/Holo/Teams)
-    ใช้ async wrapper เสมอ เพื่อหลีกเลี่ยง "coroutine was never awaited"
-    """
     try:
         _bgcall(_call_notify_user_async, db, employee_id, ev)
     except Exception:
         logger.exception("notify_user spawn failed")
-
     try:
         _bgcall(_call_notify_job_event_async, db, ev)
     except Exception:
@@ -315,6 +304,10 @@ DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "Delta")
 AUTO_START_ON_ENQUEUE    = _env_bool("AUTO_START_ON_ENQUEUE", True)
 RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
 ALLOW_ADMIN_HEADER       = _env_bool("ALLOW_ADMIN_HEADER", True)
+
+# === NEW: Bed-empty gating toggles ===========================================
+REQUIRE_BED_EMPTY = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
+BED_EMPTY_MAX_AGE_SEC = int(os.getenv("BED_EMPTY_MAX_AGE_SEC") or "300")
 
 AUTO_PREVIEW_ON_ENQUEUE = _env_bool("AUTO_PREVIEW_ON_ENQUEUE", True)
 PREVIEW_HIDE_TRAVEL     = _env_bool("SLICER_PREVIEW_HIDE_TRAVEL", True)
@@ -345,6 +338,44 @@ except Exception:
 
 ALLOWED_SOURCE = {"upload", "history", "storage"}
 
+# ==== Bed-empty gate ====
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or default)
+    except Exception:
+        return int(default)
+
+REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
+BED_EMPTY_MAX_AGE_SEC = _env_int("BED_EMPTY_MAX_AGE_SEC", 300)
+
+async def _bed_empty_recent_async(printer_id: str) -> bool:
+    """
+    true เมื่อ /notifications/bed/status บอกว่าเห็น bed_empty ล่าสุด
+    และอายุไม่เกิน BED_EMPTY_MAX_AGE_SEC วินาที
+    """
+    if not REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
+        return True
+    if not ADMIN_TOKEN:
+        logger.warning("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT=1 แต่ไม่มี ADMIN_TOKEN")
+        return False
+    url = f"{BACKEND_INTERNAL_BASE}/notifications/bed/status"
+    params = {"printer_id": _norm_printer_id(printer_id)}
+    headers = {"X-Admin-Token": ADMIN_TOKEN}
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as c:
+            r = await c.get(url, params=params, headers=headers)
+            if r.status_code != 200:
+                logger.info("[QUEUE] bed-status HTTP %s: %s", r.status_code, r.text[:200])
+                return False
+            js = r.json() or {}
+            if not js.get("ok"):
+                return False
+            age = float(js.get("age_sec") or 9e9)
+            return age <= float(BED_EMPTY_MAX_AGE_SEC)
+    except Exception:
+        logger.exception("[QUEUE] bed-status check failed")
+        return False
+    
 def status_order_expr():
     return case(
         (PrintJob.status.in_(("processing", "printing")), 0),
@@ -666,7 +697,6 @@ def ensure_preview_once(gcode_key: str) -> Optional[str]:
         pass
     last = _PREVIEW_LAST_TS.get(preview_key, 0.0)
     if (time.time() - last) < PREVIEW_DEBOUNCE_SEC:
-        # มี cache/debounce → ยอมคืน key ให้ FE ใช้ URL โหลดเมื่อไฟล์พร้อม
         return preview_key
     lock = _PREVIEW_LOCKS.setdefault(preview_key, Lock())
     acquired = lock.acquire(blocking=False)
@@ -929,7 +959,7 @@ def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name:
             logger.info("[QUEUE] notify job-event (local) %s #%s", status_out, job_id)
             return
         except Exception:
-            logger.exception("[QUEUE] notify local not available, fallback HTTP")
+            logger.exception("[QUEUE] notify local not available, fallback HTTP]")
         try:
             base = BACKEND_INTERNAL_BASE
             admin = ADMIN_TOKEN
@@ -945,10 +975,44 @@ def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name:
 
     _bgcall(_run)
 
+# -------------------------- bed-empty status (NEW) ---------------------------
+def _bed_empty_recent_sync(printer_id: str) -> bool:
+    """
+    ดึงสถานะเตียงล่าสุดจาก notifications service
+    ยอมให้ผ่านเมื่อ:
+      - ปิด REQUIRE_BED_EMPTY หรือ
+      - age_sec <= BED_EMPTY_MAX_AGE_SEC
+    """
+    if not REQUIRE_BED_EMPTY:
+        return True
+    if not ADMIN_TOKEN:
+        logger.warning("[QUEUE] bed-gate: ADMIN_TOKEN missing -> block")
+        return False
+    url = f"{BACKEND_INTERNAL_BASE}/notifications/bed/status"
+    try:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as c:
+            r = c.get(url, params={"printer_id": printer_id}, headers={"X-Admin-Token": ADMIN_TOKEN})
+            if r.status_code != 200:
+                logger.info("[QUEUE] bed-gate: HTTP %s from %s", r.status_code, url)
+                return False
+            js = r.json() or {}
+            if not js.get("ok"):
+                logger.info("[QUEUE] bed-gate: no ok (%s)", js.get("reason"))
+                return False
+            age = float(js.get("age_sec") or 1e9)
+            ok = (age <= BED_EMPTY_MAX_AGE_SEC)
+            if not ok:
+                logger.info("[QUEUE] bed-gate: age %.1fs > limit %ss", age, BED_EMPTY_MAX_AGE_SEC)
+            return ok
+    except Exception:
+        logger.exception("[QUEUE] bed-gate: check failed")
+        return False
+
 # -------------------------- queue flow helpers -------------------------------
 def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[BackgroundTasks] = None) -> Optional[PrintJob]:
     printer_id = _norm_printer_id(printer_id)
 
+    # ยังมีงานกำลังวิ่งอยู่ → ไม่เริ่ม
     has_processing = db.query(PrintJob).filter(
         PrintJob.printer_id == printer_id,
         PrintJob.status == "processing"
@@ -956,14 +1020,22 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
     if has_processing:
         return None
 
+    # ไม่มีคิว → จบ
     next_job = db.query(PrintJob).filter(
         PrintJob.printer_id == printer_id,
         PrintJob.status == "queued"
     ).order_by(PrintJob.uploaded_at.asc(), PrintJob.id.asc()).first()
-
     if not next_job:
         return None
 
+    # === NEW: bed-empty gate ===
+    if REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
+        ok = _bed_empty_recent_sync(printer_id)
+        if not ok:
+            logger.info("[QUEUE] block start: bed not confirmed empty (printer=%s, job#%s)", printer_id, next_job.id)
+            return None
+
+    # ผ่าน gate → เริ่มงาน
     now = datetime.utcnow()
     next_job.status = "processing"
     if not next_job.started_at:
@@ -971,7 +1043,6 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
     db.add(next_job); db.commit(); db.refresh(next_job)
 
     _bind_runmap_remote(printer_id, next_job)
-
     _submit_bg(tasks, _dispatch_to_octoprint, db, next_job, tasks)
     return next_job
 
@@ -1459,9 +1530,20 @@ def internal_process_next(
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
     x_admin_token: str = Header(default=""),
+    x_reason: str = Header(default=""),
 ):
     _check_admin_token(x_admin_token)
     pid = _norm_printer_id(printer_id)
+    if x_reason:
+        logger.info("[QUEUE] process-next requested (printer=%s) reason=%s", pid, x_reason)
+
+    reason = "-"
+    try:
+        if request is not None:
+            reason = request.headers.get("X-Reason", "-")
+    except Exception:
+        pass
+    logger.info("[QUEUE] process-next requested (printer=%s) reason=%s force=%s", pid, reason, bool(force))
 
     has_processing = db.query(PrintJob).filter(
         PrintJob.printer_id == pid,
@@ -1514,7 +1596,7 @@ def internal_process_next(
 
     job = _start_next_job_if_idle(db, pid, background_tasks)
     if not job:
-        return {"ok": True, "message": "no-job"}
+        return {"ok": True, "message": "no-job-or-bed-not-empty"}
     return {"ok": True, "message": "started", "jobId": job.id}
 
 # -----------------------------------------------------------------------------#

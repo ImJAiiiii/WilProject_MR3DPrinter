@@ -134,11 +134,14 @@ def _fmt_bkk(dt: Optional[datetime] = None) -> str:
     d = (dt or datetime.utcnow()).astimezone(_TZ_BKK)
     return d.strftime("%d %b %Y %H:%M")
 
-async def _call_internal(path: str) -> dict:
+async def _call_internal(path: str, *, reason: str | None = None) -> dict:
     url = f"{BACKEND_INTERNAL_BASE}{path}"
+    headers = {"X-Admin-Token": ADMIN_TOKEN}
+    if reason:
+        headers["X-Reason"] = reason
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.post(url, headers={"X-Admin-Token": ADMIN_TOKEN})
+            r = await c.post(url, headers=headers)
             r.raise_for_status()
             return r.json()
     except Exception:
@@ -1352,7 +1355,10 @@ async def ingest_detect_alert(
                 pass
 
             if state not in ("printing","paused"):
-                _ = await _call_internal(f"/internal/printers/{printer_id}/queue/process-next?force=1")
+                _ = await _call_internal(
+                f"/internal/printers/{printer_id}/queue/process-next?force=1",
+                reason="bed_empty"
+            )
 
             if BED_EMPTY_BROADCAST:
                 await _emit_printer_event(printer_id, {
@@ -1707,3 +1713,14 @@ async def close_panel(
         raise HTTPException(status_code=401, detail="Unauthorized")
     await _close_sticky_panel(printer_id, persist_key=persist_key)
     return {"ok": True}
+
+@router.get("/bed/status")
+def bed_status(printer_id: str, x_admin_token: str = Header(default="")):
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    pid = (printer_id or "").strip().lower()
+    ts = _BED_EMPTY_TS.get(pid)
+    if not ts:
+        return {"ok": False, "reason": "no_bed_empty_seen"}
+    age = (datetime.utcnow() - ts).total_seconds()
+    return {"ok": True, "last_empty_ts": ts.timestamp(), "age_sec": age}
