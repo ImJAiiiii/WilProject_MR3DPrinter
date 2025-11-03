@@ -117,6 +117,54 @@ except Exception:
     manifest_key_for = None                    # type: ignore
     _HAS_MANIFEST = False
 
+# ---------- siblings / cleanup helpers ----------
+def _preview_keys_from_gcode(gk: str | None) -> list[str]:
+    """คืนรายชื่อ key preview ทั้งสองแบบ (.preview.png และ _preview.png)"""
+    if not gk or not re.search(r"\.(gcode|gco|gc)$", gk, flags=re.I):
+        return []
+    base = re.sub(r"\.(gcode|gco|gc)$", "", gk, flags=re.I)
+    return [f"{base}.preview.png", f"{base}_preview.png"]
+
+def _manifest_key_for_safe(gk: str | None) -> str | None:
+    if not gk:
+        return None
+    if _HAS_MANIFEST and manifest_key_for:
+        try:
+            mk = manifest_key_for(gk)  # type: ignore
+            if mk:
+                return mk
+        except Exception:
+            pass
+    try:
+        return str(Path(gk).with_suffix(".json")).replace("\\", "/")
+    except Exception:
+        return None
+
+def _delete_siblings_all(db: Session, main_gcode_key: str):
+    """ลบ preview/manifest บน S3 + ลบ row DB ของไฟล์พี่น้อง"""
+    sibs: List[str] = []
+    sibs += _preview_keys_from_gcode(main_gcode_key)
+    mk = _manifest_key_for_safe(main_gcode_key)
+    if mk:
+        sibs.append(mk)
+
+    # ลบ object บน S3
+    for k in sibs:
+        try:
+            delete_object(k)
+        except Exception:
+            pass
+
+    # ลบ row DB ที่ชี้ไปยัง key เหล่านี้
+    if sibs:
+        try:
+            (db.query(StorageFile)
+               .filter(StorageFile.object_key.in_(sibs))
+               .delete(synchronize_session=False))
+            db.commit()
+        except Exception:
+            db.rollback()
+
 import boto3
 
 # === ใช้ prefix ให้ตรงกับ FE ===
@@ -729,10 +777,20 @@ def delete_file(fid: int, db: Session=Depends(get_db), me: User=Depends(get_curr
     _validate_key(row.object_key)
     if not _is_gcode_name(row.filename or row.object_key or ""): raise HTTPException(422,"Only G-code files can be deleted here")
     if not _owner_or_manager(me,row): raise HTTPException(403,"Only owner or manager can delete")
+
     if delete_object_from_s3:
         try: delete_object(row.object_key)
         except Exception: pass
-    db.delete(row); db.commit()
+
+    # ลบไฟล์พี่น้อง (preview / manifest) + row DB ของพี่น้อง
+    _delete_siblings_all(db, row.object_key)
+
+    try:
+        db.delete(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+
     return Response(status_code=204)
 
 @router.delete("/by-key", status_code=204)
@@ -740,13 +798,38 @@ def delete_by_key(object_key: str=Query(...), db: Session=Depends(get_db),
                   me: User=Depends(get_current_user), delete_object_from_s3: bool=Query(True)):
     key=_validate_key(object_key)
     row=db.query(StorageFile).filter(StorageFile.object_key==key).first()
-    if not row: return Response(status_code=204)
+
+    # ถ้าไม่มี row ต้องเป็นผู้จัดการ และลบได้เฉพาะ G-code เท่านั้น (เพราะตรวจ owner ไม่ได้)
+    if not row:
+        if not _is_manager(me):
+            raise HTTPException(403, "Only manager can delete orphan objects")
+        if not _is_gcode_name(key):
+            raise HTTPException(422, "Only G-code files can be deleted here")
+
+        if delete_object_from_s3:
+            try:
+                delete_object(key)
+            except Exception:
+                pass
+        _delete_siblings_all(db, key)
+        return Response(status_code=204)
+
     if not _is_gcode_name(row.filename or row.object_key or ""): raise HTTPException(422,"Only G-code files can be deleted here")
     if not _owner_or_manager(me,row): raise HTTPException(403,"Only owner or manager can delete")
+
     if delete_object_from_s3:
         try: delete_object(row.object_key)
         except Exception: pass
-    db.delete(row); db.commit(); return Response(status_code=204)
+
+    _delete_siblings_all(db, row.object_key)
+
+    try:
+        db.delete(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return Response(status_code=204)
 
 @router.delete("/my")
 def delete_my_files_bulk(
@@ -764,7 +847,11 @@ def delete_my_files_bulk(
         if delete_object_from_s3:
             try: delete_object(r.object_key)
             except Exception: pass
-        db.delete(r); count+=1
+        _delete_siblings_all(db, r.object_key)
+        try:
+            db.delete(r); count+=1
+        except Exception:
+            db.rollback()
     db.commit(); return {"ok":True,"deleted":count}
 
 # ---------- presign / head / range ----------
