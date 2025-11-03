@@ -1151,7 +1151,7 @@ class JobEventIn(BaseModel):
     finished_at: Optional[datetime] = None
 
 def _status_title_severity(st: str) -> Tuple[str,str]:
-    if st == "completed": return "🎉 Print completed","info"
+    if st == "completed": return "🎉 Print completed","success"
     if st == "cancelled": return "🚫 Print cancelled","warning"
     return "❌ Print failed","critical"
 
