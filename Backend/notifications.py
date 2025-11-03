@@ -1177,6 +1177,17 @@ def _find_active_owner(db: Session, printer_id: str) -> Optional[str]:
 def _normalize_recipients(recipients: list[str] | None) -> list[str]:
     return [ (r or "").strip() for r in (recipients or []) if (r or "").strip() ]
 
+# ---- Reason helper (pretty label) -------------------------------------------
+_REASON_LABELS = {
+    "spaghetti": "Spaghetti",
+    "layer_shift": "Layer shift",
+    "stringing": "Stringing",
+    "cracks": "Cracks",
+}
+def _reason_label(clsname: str) -> str:
+    c = (clsname or "").strip().lower()
+    return _REASON_LABELS.get(c, c or "-")
+
 # =============================================================================
 # REST — per-user notifications (web)
 # =============================================================================
@@ -1432,11 +1443,13 @@ async def ingest_detect_alert(
     job_id   = job_on_bed.id if job_on_bed else None
     job_name = (job_on_bed.name or "").strip() if job_on_bed else None
 
-    cls_part = f"{payload.detected_class} ({conf:.2f})" if payload.detected_class else "-"
-    base_name = job_name or (payload.status_text or payload.detected_class) or "-"
+    # ---- build unified reason text & data ----
+    reason_txt = _reason_label(clsname)
+    cls_part = f"{reason_txt} ({conf:.2f})" if payload.detected_class else "-"
+    base_name = job_name or (payload.status_text or reason_txt) or "-"
     msg = (
         f"{base_name}  • source={payload.source or 'detect_stream'}  "
-        f"printer={printer_id}  class={cls_part}  "
+        f"printer={printer_id}  reason={cls_part}  "
         f"boxes={len(payload.boxes or [])}  (Bangkok time { _fmt_bkk() })"
     )
 
@@ -1448,6 +1461,9 @@ async def ingest_detect_alert(
         data["name"] = job_name
         data["job_name"] = job_name
     data["status"] = _canon_status(data.get("status"))
+    # NEW: explicit reason fields
+    data["reason"] = clsname
+    data["reason_label"] = reason_txt
 
     # auto-pause
     paused_owner: Optional[str] = None
@@ -1462,10 +1478,11 @@ async def ingest_detect_alert(
             job = _pause_current_job_in_db(db, printer_id)
             if job:
                 paused_owner = job.employee_id
+                # Holo/web panel + toast
                 await _emit_printer_event(printer_id, {
                     "event":"job_paused","printer_id":printer_id,"job_id":job.id,"name":job.name,
                     "ts": datetime.utcnow().timestamp(),"severity":"warning",
-                    "title":"⏸️ Print paused","message": f"{job.name} • {payload.detected_class} ({conf:.2f})",
+                    "title":"⏸️ Print paused","message": f"{job.name} • {reason_txt} ({conf:.2f})",
                     "owner_employee_id": (job.employee_id or "").strip(),
                     "requested_by_employee_id": (getattr(job, "requested_by_employee_id", "") or "").strip(),
                 })
@@ -1473,7 +1490,7 @@ async def ingest_detect_alert(
                 panel_payload = {
                     "event":"alert","printer_id":printer_id,"ts": datetime.utcnow().timestamp(),
                     "severity":"warning","title":"⏸️ Print paused (anomaly detected)",
-                    "message": f"{job.name} • {payload.detected_class} ({conf:.2f})",
+                    "message": f"{job.name} • {reason_txt} ({conf:.2f})",
                     "ui": {"type":"panel","variant":"warning","sticky":True,"timeout_ms":0,"require_action":True,
                            "persist_key":persist_key,"actions":[
                                {"type":"button","label":"Resume","command":"pause","action":"resume"},
@@ -1482,15 +1499,27 @@ async def ingest_detect_alert(
                     "requested_by_employee_id": (getattr(job, "requested_by_employee_id", "") or "").strip(),
                 }
                 _spawn(_panel_watchdog, printer_id, panel_payload, interval=12.0)
-                # แจ้งเจ้าของด้วย canonical event
+
+                # แจ้งเจ้าของ: BOTH paused + issue (same reason)  <<<<<<<<<<<<<<<<<<<<<<<<
                 ev_paused = format_canonical_event(
                     type="print.paused", status="paused", severity="warning",
                     title="⏸️ Print paused (anomaly detected)",
-                    message=f"{job.name} • {payload.detected_class} ({conf:.2f})",
+                    message=f"{job.name} • {reason_txt} ({conf:.2f})",
                     printer_id=printer_id,
-                    data={"job_id": job.id, "name": job.name, "detected_class": clsname, "confidence": conf}
+                    data={"job_id": job.id, "name": job.name, "detected_class": clsname, "confidence": conf,
+                          "reason": clsname, "reason_label": reason_txt}
                 )
                 await emit_canonical_event(db, job.employee_id, ev_paused)
+
+                ev_issue_owner = format_canonical_event(
+                    type="print.issue", status="issue", severity="critical",
+                    title="🛑 Anomaly detected",
+                    message=f"{job.name}  • printer={printer_id}  reason={reason_txt} ({conf:.2f})  (Bangkok time { _fmt_bkk() })",
+                    printer_id=printer_id,
+                    data={"job_id": job.id, "name": job.name, "detected_class": clsname, "confidence": conf,
+                          "reason": clsname, "reason_label": reason_txt}
+                )
+                await emit_canonical_event(db, job.employee_id, ev_issue_owner)
 
     # broadcast anomaly / cleared (ใส่ชื่อ/ไอดีงานด้วย)
     current_owner = _find_active_owner(db, printer_id)
@@ -1503,6 +1532,7 @@ async def ingest_detect_alert(
         "owner_employee_id": (current_owner or ""),
         "name": job_name or None,
         "job_id": job_id if job_id is not None else None,
+        "reason": clsname, "reason_label": reason_txt,
     })
 
     # notify recipients -> ใช้ canonical event เดียวกัน
@@ -1518,8 +1548,7 @@ async def ingest_detect_alert(
         printer_id=printer_id, data=data
     )
     for emp in recipients:
-        if paused_owner and emp == paused_owner:
-            continue
+        # ตอนนี้เจ้าของก็ได้รับ issue แล้ว (ด้านบน) แต่ถ้าหลุดมาก็ยังยิงซ้ำได้ไม่เป็นไร
         await emit_canonical_event(db, emp, ev_issue)
 
     if event == "issue_cleared":
@@ -1551,6 +1580,7 @@ async def job_event(
 
     cls_raw = payload.detected_class or ""
     cls_norm = _norm_cls(cls_raw)
+    reason_txt = _reason_label(cls_norm)
     conf = float(payload.confidence or 0.0)
 
     if _announced(printer_id, job.id, payload.status): return {"ok": True, "skipped":"already_announced"}
@@ -1558,7 +1588,7 @@ async def job_event(
 
     if payload.status in ("cancelled","failed"): _suppress_after_cancel(printer_id)
 
-    extra = f" • reason: {cls_raw} ({conf:.2f})" if payload.status == "failed" and cls_norm in ALLOWED_FAIL_DETECT_CLASSES else ""
+    extra = f" • reason: {reason_txt} ({conf:.2f})" if payload.status == "failed" and cls_norm in ALLOWED_FAIL_DETECT_CLASSES else ""
     msg = (
         f"printer={printer_id} • job_id={job.id} • {job.name or payload.name or '-'}"
         f"{extra} • {payload.status}  (Bangkok time { _fmt_bkk(payload.finished_at or job.finished_at) })"
@@ -1566,6 +1596,7 @@ async def job_event(
 
     data = {"job_id":job.id,"printer_id":printer_id,"status":payload.status,"name":job.name or payload.name,
             "detected_class": cls_raw or None, "confidence": payload.confidence,
+            "reason": cls_norm or None, "reason_label": reason_txt if cls_norm else None,
             "finished_at": (payload.finished_at or job.finished_at or datetime.utcnow()).isoformat()}
 
     evt = {"completed":"job_completed","cancelled":"job_cancelled","failed":"job_failed"}.get(payload.status,"job_status")
@@ -1575,6 +1606,7 @@ async def job_event(
         "confidence": payload.confidence, "name": job.name or payload.name, "ts": datetime.utcnow().timestamp(),
         "owner_employee_id": (job.employee_id or "").strip(),
         "requested_by_employee_id": (getattr(job, "requested_by_employee_id", "") or "").strip(),
+        "reason": cls_norm or None, "reason_label": reason_txt if cls_norm else None,
     })
 
     try: await _close_sticky_panel(printer_id, persist_key=f"pause-{printer_id}")
@@ -1685,7 +1717,7 @@ es.onmessage = (e) => {{
   try {{
     const obj = JSON.parse(e.data);
     const t = obj.ts ? new Date(obj.ts*1000).toLocaleTimeString() : new Date().toLocaleTimeString();
-    const cls = obj.detected_class || '-';
+    const cls = obj.reason_label || obj.detected_class || '-';
     const conf = obj.confidence != null ? Number(obj.confidence).toFixed(2) : '-';
     const line = `[${{t}}] ${{obj.event}}  ${{obj.printer_id || '-'}}  ${{cls}} (${{conf}})`;
     log.textContent = line + "\\n" + log.textContent;
