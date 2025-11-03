@@ -60,7 +60,10 @@ function derivePreviewCandidatesFromGcodeKey(k) {
   if (!k) return [];
   const i = k.lastIndexOf(".");
   const base = i >= 0 ? k.slice(0, i) : k;
-  return [`${base}.preview.png`, `${base}_preview.png`];
+  // กันซ้ำ
+  const a = `${base}.preview.png`;
+  const b = `${base}_preview.png`;
+  return a === b ? [a] : [a, b];
 }
 
 // สร้าง URL สำหรับ preview จาก key/metadata (รวม cache bust + token)
@@ -91,17 +94,16 @@ function makeOnImgError(fallbackSrc) {
 /* ---------- component ---------- */
 export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   const api = useApi();
-  // ดึง token มาแนบกับ /files/raw
   const { user, token } = useAuth();
 
-  // ❗️เปลี่ยนค่าเริ่มต้นเป็น `null` เพื่อแสดงสถานะกำลังโหลด และกันไม่ให้ merge กับ props ระหว่างโหลด
+  // ใช้ null เป็น state ขณะโหลด
   const [serverItems, setServerItems] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const dq = useDebounce(q, 300);
 
-  // filter model: ALL | DELTA | HONTECH (remember in localStorage)
+  // filter model
   const [modelFilter, setModelFilter] = useState(() => {
     try { return localStorage.getItem("storage:modelFilter") || "ALL"; } catch { return "ALL"; }
   });
@@ -109,6 +111,9 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [openReprint, setOpenReprint] = useState(false);
+
+  // กันดับเบิลลบ
+  const [deletingKey, setDeletingKey] = useState(null);
 
   // prevent race
   const fetchSeq = useRef(0);
@@ -118,7 +123,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     const mySeq = ++fetchSeq.current;
     setErr("");
     setLoading(true);
-    setServerItems(null); // ❗️เคลียร์รายการเก่าให้เป็น loading state ทุกครั้งที่ยิง fetch
+    setServerItems(null);
     try {
       const modelParam = modelFilter === "ALL" ? undefined : modelFilter;
       const res = await api.get(
@@ -129,8 +134,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
           offset: 0,
           limit: 2000,
           with_urls: 1,
-          with_head: 1,
-          include_staging: 0,   // ❗️ดึงเฉพาะไฟล์ใน catalog ตัด staging กันไฟล์กลางทางโผล่
+          with_head: 1
         },
         { timeoutMs: 20000 }
       );
@@ -140,7 +144,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       if (mySeq === fetchSeq.current) {
         console.error("storage.catalog failed:", e);
         setErr(e?.message || "Failed to load storage.");
-        setServerItems([]); // set เป็นว่างเพื่อให้จบ loading
+        setServerItems([]);
       }
     } finally {
       if (mySeq === fetchSeq.current) setLoading(false);
@@ -152,25 +156,18 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
 
   /* ---------- adaptors ---------- */
   const adaptFromServer = useCallback((raw) => {
-    // backend returns:
-    // { display_name, filename, object_key, model, size, size_text, content_type,
-    //   ext, uploaded_at, thumb, preview_url, json_key,
-    //   uploader?{employee_id,name,email}, stats? }
     const name = raw?.display_name || raw?.name || raw?.filename || "";
     const ext = (raw?.ext) || getExt(raw?.filename || name);
     const isGcode = isGcodeExt(ext);
     const ts = parseTs(raw?.uploaded_at);
 
-    // 1) ถ้า preview_url เป็น https:// ใช้ตรง
+    // preview url
     let thumbUrl = null, thumbAlt = "";
     if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
       thumbUrl = raw.preview_url;
     } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      // preview_url เป็น "key" → /files/raw
       thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
     }
-
-    // 2) ถ้ายังไม่มี ให้ลองจาก thumb(key) หรือ gcode_key/object_key
     if (!thumbUrl) {
       if (raw?.thumb) {
         thumbUrl = toRawUrl(api.API_BASE, raw.thumb, token);
@@ -187,7 +184,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       }
     }
 
-    // sanitize uploader
     const up = raw?.uploader || null;
     let uploaderName = (up?.name || up?.employee_id || "") || null;
     if (uploaderName && (uploaderName.toLowerCase() === (name || "").toLowerCase() || looksLikeFilename(uploaderName))) {
@@ -195,7 +191,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     }
     const uploaderEmp = up?.employee_id || null;
 
-    // ขนาดไฟล์
     let sizeText = raw?.size_text || null;
     if (!sizeText && typeof raw?.size === "number") {
       const mb = raw.size / (1024 * 1024);
@@ -213,16 +208,16 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       uploadedAt: fmtLocal(ts),
       sizeText,
       thumb: thumbUrl || "/icon/file.png",
-      thumbAlt,                           // << เก็บ alt ไว้ด้วย
+      thumbAlt,
       _raw: raw,
-      storageId: raw?.id ?? null,         // อาจไม่มีจาก /catalog
+      storageId: raw?.id ?? null,
       object_key: raw?.object_key || null,
       gcode_key: raw?.gcode_key || (isGcode ? raw?.object_key : null),
       preview_key: raw?.thumb || null,
       template: null,
       stats: raw?.stats ?? null,
       uploader: uploaderName,
-      uploaderEmployeeId: uploaderEmp,
+      uploaderEmployeeId: uploaderEmp
     };
   }, [api, token]);
 
@@ -238,7 +233,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     }
     const uploaderEmp = (up && up.employee_id) || raw?.employee_id || raw?._raw?.employee_id || null;
 
-    // เดา preview จาก key ถ้าเป็น gcode
     const objectKey = raw?.object_key ?? raw?._raw?.object_key ?? null;
     const isG = isGcodeExt(ext);
 
@@ -255,7 +249,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       thumbUrl = src || "/icon/file.png";
       thumbAlt = alt || "";
     } else if (!/^https?:\/\//i.test(thumbUrl) && typeof thumbUrl === "string") {
-      // ถ้า thumb เป็น key
       thumbUrl = toRawUrl(api.API_BASE, thumbUrl, token);
     }
 
@@ -276,7 +269,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       template: raw?.template ?? null,
       stats: raw?.stats ?? null,
       uploader: uploaderName,
-      uploaderEmployeeId: uploaderEmp,
+      uploaderEmployeeId: uploaderEmp
     };
 
     if (out.isGcode && out.object_key) out.gcode_key = raw?.gcode_key || out.object_key;
@@ -289,7 +282,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   const merged = useMemo(() => {
     const A = (serverItems || []).map(adaptFromServer);
 
-    // ❗️ถ้ายังโหลดจากเซิร์ฟเวอร์ไม่เสร็จ ให้ “ไม่” merge กับ props เพื่อตัดไฟล์ค้าง/ปลอมไม่ให้โชว์ก่อน
     const usePropItems = serverItems !== null;
     const serverKeys = new Set(A.map(x => x.object_key).filter(Boolean));
     const B0 = usePropItems ? (items || []).map(adaptFromProp) : [];
@@ -346,24 +338,48 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
 
   const handleDelete = async (e, f) => {
     e.stopPropagation();
-    if (!canDelete(f)) return;
+    if (!canDelete(f) || deletingKey) return;
     if (!window.confirm(`Delete "${f.name}" ?`)) return;
 
+    setDeletingKey(f.object_key || f.id || f.name);
     try {
+      // 1) ลบด้วย id ถ้ามีฟิลด์ id/StorageFile.id (แม่นสุด)
       if (f.storageId != null && api.storage?.deleteById) {
-        await api.storage.deleteById(f.storageId, { deleteFromS3: true }, { timeoutMs: 15000 });
+        await api.storage.deleteById(
+          f.storageId,
+          { delete_object_from_s3: true },
+          { timeoutMs: 15000 }
+        );
       } else if (f.object_key) {
-        // fallback ไปที่ endpoint /api/storage/by-key
+        // 2) ลบด้วย key (รองรับกรณีที่ดึงมาจาก /catalog ที่ไม่ส่ง id)
         if (api.storage?.deleteByKey) {
-          await api.storage.deleteByKey({ object_key: f.object_key, delete_object_from_s3: true }, { timeoutMs: 15000 });
+          await api.storage.deleteByKey(
+            { object_key: f.object_key, delete_object_from_s3: true },
+            { timeoutMs: 15000 }
+          );
         } else {
-          await api.del("/api/storage/by-key", { object_key: f.object_key, delete_object_from_s3: true }, { timeoutMs: 15000 });
+          // fallback ให้แน่ใจว่า param ชื่อ object_key (กันปัญหา key=object_key ซ้อน)
+          await api.del(
+            "/api/storage/by-key",
+            { object_key: f.object_key, delete_object_from_s3: true },
+            { timeoutMs: 15000 }
+          );
         }
       }
+      // รีเฟรชจากเซิร์ฟเวอร์
       await fetchServer();
-    } catch (err) {
-      if (onDeleteItem) { onDeleteItem(f.id); return; }
-      alert(String(err?.message || "Delete failed"));
+    } catch (error) {
+      console.error("delete failed:", error);
+      const msg = String(error?.message || error || "Delete failed");
+      if (/403/.test(msg)) {
+        alert("You don't have permission to delete this file.");
+      } else {
+        alert(msg);
+      }
+      // ให้ FE fallback ลบการ์ดทิ้งถ้าผู้ใช้ส่ง onDeleteItem มา
+      if (onDeleteItem) onDeleteItem(f.id);
+    } finally {
+      setDeletingKey(null);
     }
   };
 
@@ -435,60 +451,63 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
       ) : (
         <div className="file-grid" aria-busy={loading ? "true" : "false"}>
-          {files.map((f) => (
-            <div key={`${f.object_key || f.id || f.name}`} className="file-card-wrap">
-              <button
-                className="file-card"
-                onClick={() => openModal(f)}
-                onKeyDown={(e) => (e.key === "Enter") && openModal(f)}
-                aria-label={`Open ${f.name}${f.uploader ? `, uploaded by ${f.uploader}` : ""}`}
-                title={f.name}
-              >
-                <div className="thumb-wrap">
-                  <img
-                    className="file-thumb"
-                    src={f.thumb || placeholder}
-                    data-alt-src={f.thumbAlt || ""}
-                    alt={f.name}
-                    onError={onImgError}
-                    loading="lazy"
-                    decoding="async"
-                    draggable="false"
-                  />
-                </div>
-
-                <div className="file-name">
-                  <div className="file-title" title={f.name}>
-                    {f.name}
+          {files.map((f) => {
+            const delDisabled = deletingKey && (deletingKey === (f.object_key || f.id || f.name));
+            return (
+              <div key={`${f.object_key || f.id || f.name}`} className="file-card-wrap">
+                <button
+                  className="file-card"
+                  onClick={() => openModal(f)}
+                  onKeyDown={(e) => (e.key === "Enter") && openModal(f)}
+                  aria-label={`Open ${f.name}${f.uploader ? `, uploaded by ${f.uploader}` : ""}`}
+                  title={f.name}
+                >
+                  <div className="thumb-wrap">
+                    <img
+                      className="file-thumb"
+                      src={f.thumb || placeholder}
+                      data-alt-src={f.thumbAlt || ""}
+                      alt={f.name}
+                      onError={onImgError}
+                      loading="lazy"
+                      decoding="async"
+                      draggable="false"
+                    />
                   </div>
 
-                  {/* แสดงผู้ที่อัปโหลด: “by <Full Name/EmpID>” */}
-                  <div className="file-uploader">
-                    {f.uploader ? <span>by {f.uploader}</span> : null}
+                  <div className="file-name">
+                    <div className="file-title" title={f.name}>
+                      {f.name}
+                    </div>
+
+                    <div className="file-uploader">
+                      {f.uploader ? <span>by {f.uploader}</span> : null}
+                    </div>
                   </div>
-                </div>
 
-                <div className="file-meta">
-                  {!!f.sizeText && <span className="meta">{f.sizeText}</span>}
-                  <span className="meta">{f.isGcode ? "G-code" : (f.ext || "").toUpperCase() || "—"}</span>
-                  {!!f.model && <span className="meta">{f.model}</span>}
-                </div>
-              </button>
+                  <div className="file-meta">
+                    {!!f.sizeText && <span className="meta">{f.sizeText}</span>}
+                    <span className="meta">{f.isGcode ? "G-code" : (f.ext || "").toUpperCase() || "—"}</span>
+                    {!!f.model && <span className="meta">{f.model}</span>}
+                  </div>
+                </button>
 
-              {canDelete(f) && (
-                <div className="file-actions-row">
-                  <button
-                    className="file-delete"
-                    title="Delete (owner/manager only)"
-                    aria-label={`Delete ${f.name}`}
-                    onClick={(e) => handleDelete(e, f)}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+                {canDelete(f) && (
+                  <div className="file-actions-row">
+                    <button
+                      className="file-delete"
+                      title={delDisabled ? "Deleting…" : "Delete (owner/manager only)"}
+                      aria-label={`Delete ${f.name}`}
+                      onClick={(e) => handleDelete(e, f)}
+                      disabled={!!delDisabled}
+                    >
+                      {delDisabled ? "…" : "×"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
