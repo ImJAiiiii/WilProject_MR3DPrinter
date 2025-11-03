@@ -15,6 +15,9 @@ const SUPPORT_LABEL = {
   everywhere: 'Everywhere',
 };
 
+// ใช้สอดคล้องกับ BE
+const MATERIAL_OPTIONS = ['PLA', 'PETG', 'ABS', 'TPU', 'NYLON'];
+
 /* ---------- helpers ---------- */
 const getExt = (n = '') => {
   const s = String(n || '');
@@ -22,16 +25,19 @@ const getExt = (n = '') => {
   return i >= 0 ? s.slice(i + 1).toLowerCase() : '';
 };
 const isGcodeExt = (ext = '') => ['gcode', 'gco', 'gc'].includes((ext || '').toLowerCase());
-const isMeshExt  = (ext = '') => ['stl', '3mf', 'obj'].includes((ext || '').toLowerCase());
+// ⛔ จำกัด “เมช” เป็น STL เท่านั้น
+const isMeshExt  = (ext = '') => ['stl'].includes((ext || '').toLowerCase());
 const baseName   = (n = '') => String(n || '').replace(/\.[^.]+$/, '');
 const ensureGcodeName = (n = '') =>
   (n || 'model').match(/\.(gcode|gco|gc)$/i) ? n : `${baseName(n)}.gcode`;
 const isStagingKey = (k = '') => /^staging\//i.test(k || '');
 const isFinalKey   = (k = '') => !!(k && !/^staging\//i.test(k || ''));
 
+// ใช้ทำค้นชื่อคล้าย
 const normalizeName = (s = '') =>
   (s || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/_v\d+$/i, '');
 
+// printer slug ที่ BE ใช้
 const normalizePrinterId = (x) => {
   const s = String(x || '').trim();
   if (!s) return (process.env.REACT_APP_PRINTER_ID || 'prusa-core-one');
@@ -47,12 +53,13 @@ const normalizePrinterId = (x) => {
   return slug || (process.env.REACT_APP_PRINTER_ID || 'prusa-core-one');
 };
 
+// กรองคำแนะนำให้เหลือเฉพาะชื่อที่เป็น G-code หรือ pattern ที่ถูก
 const isGcodeName = (n = '') => /\.(gcode|gco|gc)$/i.test(n || '');
-const isMeshName  = (n = '') => /\.(stl|3mf|obj)$/i.test(n || '');
+const isMeshName  = (n = '') => /\.(stl)$/i.test(n || '');
 const allowHint = (n = '') => {
   const s = (n || '').trim();
   if (!s) return false;
-  if (isMeshName(s)) return false;
+  if (isMeshName(s)) return false; // hint เฉพาะ gcode
   if (isGcodeName(s)) return true;
   const stem = s.replace(/\.[^.]+$/, '');
   return NAME_REGEX.test(stem);
@@ -64,11 +71,12 @@ const normalizeModel = (m = '') => {
   return up === 'HONTECH' ? 'HONTECH' : up === 'DELTA' ? 'DELTA' : null;
 };
 
+// โฟลเดอร์สำหรับ S3/MinIO ให้เป็น: catalog/<MODEL>/<BaseName_VN>/
 function modelToS3Prefix(model, jobName) {
   const M = normalizeModel(model);
   if (!M) return null;
   const name = String(jobName || '').trim();
-  if (!name || !NAME_REGEX.test(name)) return null; // ต้องผ่านแพทเทิร์นก่อน
+  if (!name || !NAME_REGEX.test(name.replace(/\.[^.]+$/,''))) return null; // ต้องผ่านแพทเทิร์นก่อน (ไม่บังคับ .gcode)
   const stem = name.replace(/\.[^.]+$/, ''); // ตัด .gcode ถ้ามี
   return `catalog/${M}/${stem}/`;
 }
@@ -79,7 +87,8 @@ export default function ModalUpload({
   onUploaded,
   onQueue,
 }) {
-  // ✅ Hooks ทั้งหมดต้องถูกเรียกทุกครั้ง (ไม่มี early return ก่อนหน้า)
+  if (!isOpen) return null;
+
   const api = useApi();
   const { token } = useAuth();
 
@@ -102,7 +111,7 @@ export default function ModalUpload({
   const [support, setSupport] = useState('none');
   const [wallsMsg, setWallsMsg] = useState('');
 
-  // Filament material (เฉพาะ STL/3MF/OBJ)
+  // Filament material (เฉพาะ STL)
   const [material, setMaterial] = useState('PLA');
 
   // preview
@@ -131,32 +140,48 @@ export default function ModalUpload({
     if (preparing || confirming) return;
     inputRef.current?.click();
   };
-  
+
   /* ---------- upload via presigned (→ staging/*) ---------- */
   const uploadViaPresign = useCallback(async (file) => {
     const ext = getExt(file.name);
-    // ปรับ content-type ให้ตรงฝั่ง BE โดยเฉพาะ 3MF
+    // เดา content-type ให้ตรงกับ BE: STL | G-code เท่านั้น
     const ctype =
       isMeshExt(ext)
-        ? (ext === 'stl'
-            ? 'model/stl'
-            : ext === '3mf'
-              ? 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml'
-              : 'text/plain')
+        ? 'model/stl'
         : isGcodeExt(ext)
           ? 'text/x.gcode'
           : (file.type || 'application/octet-stream');
 
-    const req = await api.storage.requestUpload({
+    // ❗ เปลี่ยนมาใช้ query string ตามที่ backend ต้องการ
+    const params = new URLSearchParams({
       filename: file.name,
+      size: String(file.size ?? 0),
       content_type: ctype,
-      size: file.size,
+      overwrite: 'false',
     });
 
+    const base = (api.API_BASE || '').replace(/\/+$/,'');
+    const url  = `${base}/api/storage/upload/request?${params.toString()}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(()=>'');
+      throw new Error(`upload request failed: ${res.status} ${txt || ''}`.trim());
+    }
+
+    // รูปแบบตอบกลับที่รองรับ: { url, headers?, object_key } หรือ presign แบบ S3 fields
+    const req = await res.json().catch(()=> ({}));
     const putUrl     = req?.url;
     const headers    = req?.headers || {};
     const stagingKey = req?.object_key;
-    if (!putUrl || !stagingKey) throw new Error('Bad /api/storage/upload/request response');
+
+    if (!putUrl || !stagingKey) {
+      throw new Error('Bad /api/storage/upload/request response');
+    }
 
     await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -171,11 +196,13 @@ export default function ModalUpload({
         if (evt.lengthComputable) setProgress(Math.round((evt.loaded / evt.total) * 100));
       };
 
+      // presigned อาจช้า → ตั้ง 3 นาที
       xhr.timeout = 180000;
       xhr.ontimeout = () => reject(new Error('Upload timeout'));
       xhr.onerror   = () => reject(new Error('Network error while uploading (PUT presigned)'));
 
       xhr.onload = () => {
+        // S3/MinIO: 200/204
         if ([200, 201, 204].includes(xhr.status)) {
           resolve();
         } else if (xhr.status === 403) reject(new Error('403 Forbidden (presign headers mismatch)'));
@@ -186,7 +213,7 @@ export default function ModalUpload({
       xhr.send(file);
     });
 
-    // ✅ แจ้ง BE ให้บันทึกเมทาดาต้าหลังอัปโหลดเสร็จ
+    // แจ้ง BE ให้บันทึกเมทาดาต้าหลังอัปโหลดเสร็จ (best effort)
     try {
       await api.storage.completeUpload({
         object_key: stagingKey,
@@ -194,17 +221,17 @@ export default function ModalUpload({
         content_type: ctype,
         size: file.size,
       });
-    } catch {}
+    } catch {/* เงียบไว้ */}
 
     return { objectKey: stagingKey };
-  }, [api.storage]);
+  }, [api.API_BASE, api.storage, token]);
 
-  /* ---------- fallback: legacy upload (ต้องคืน staging/*) ---------- */
+  /* ---------- fallback: legacy upload ---------- */
   const uploadFallbackLegacy = useCallback(async (file) => {
     const form = new FormData();
     form.append('file', file);
     const res = await new Promise((resolve, reject) => {
-      const url = `${api.API_BASE}/api/files/upload`;
+      const url = `${api.API_BASE || ''}/api/files/upload`.replace(/\/+$/,'').replace(/\/{2,}/g,'/');
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
@@ -232,7 +259,6 @@ export default function ModalUpload({
     if (!id) throw new Error('Invalid response from /api/files/upload');
     if (!isStagingKey(String(id))) throw new Error('Legacy uploader must return a staging/* key');
 
-    // พยายาม completeUpload เช่นกัน (ถ้าระบบเดิมไม่ทำ)
     try {
       await api.storage.completeUpload({
         object_key: id,
@@ -249,9 +275,16 @@ export default function ModalUpload({
   const handleFile = useCallback(async (file) => {
     if (!file || preparing || confirming) return;
 
+    const ext = getExt(file.name);
+    // ⛔ บล็อคสกุลไฟล์ที่ไม่ใช่ STL หรือ G-code
+    if (!isMeshExt(ext) && !isGcodeExt(ext)) {
+      setError('Only STL and G-code files are supported.');
+      setStatus('error');
+      return;
+    }
+
     setError('');
     setFileNameRaw(file.name);
-    const ext = getExt(file.name);
     setFileExt(ext);
     setProgress(0);
     setStatus('uploading');
@@ -261,6 +294,7 @@ export default function ModalUpload({
       try {
         result = await uploadViaPresign(file);
       } catch (e) {
+        // กรณี presigned ล้มเหลวเพราะสิทธิ์/หมดอายุ → ตกไปใช้ legacy
         if (/403|404|405/i.test(String(e?.message || ''))) {
           result = await uploadFallbackLegacy(file);
         } else {
@@ -284,10 +318,16 @@ export default function ModalUpload({
         file: { name: file.name, object_key: stagingKey },
       });
 
-      if (!userFileName) setUserFileName(baseName(file.name) + '_V1');
+      if (!userFileName) {
+        const stem = baseName(file.name);
+        // ถ้าเป็น G-code แล้วลงท้าย _Vn อยู่แล้ว ให้คงเดิม ไม่งั้นเติม _V1
+        const next = NAME_REGEX.test(stem) ? stem : `${stem}_V1`;
+        setUserFileName(next);
+      }
     } catch (err) {
       setStatus('error');
       setError(String(err?.message || err || 'Upload failed'));
+      // eslint-disable-next-line no-console
       console.error('upload failed:', err);
     }
   }, [onUploaded, uploadViaPresign, uploadFallbackLegacy, userFileName, preparing, confirming]);
@@ -324,6 +364,24 @@ export default function ModalUpload({
   /* ---------- validation ---------- */
   const nameOk = NAME_REGEX.test((userFileName || '').trim());
   const canPrepare = status === 'done' && nameOk && !!model && !nameExists && !preparing;
+
+  const applyInfill = (val) => {
+    let n = Number(val);
+    if (!Number.isFinite(n)) n = 0;
+    n = Math.round(n);
+    setInfill(Math.max(0, Math.min(100, n)));
+  };
+
+  const applyWalls = (val, fromTyping = false) => {
+    let n = Number(val);
+    if (!Number.isFinite(n)) n = 0;
+    const rounded = Math.round(n);
+    const clamped = Math.max(1, Math.min(6, rounded));
+    if (fromTyping && (!Number.isInteger(n) || n < 1 || n > 6)) setWallsMsg('ต้องเป็นจำนวนเต็ม 1–6');
+    else setWallsMsg('');
+    setWalls(clamped);
+  };
+  const stepWalls = (d) => applyWalls((Number(walls) || 0) + d, false);
 
   /* ---------- หา “ชื่อคล้าย” + กันชื่อซ้ำ ---------- */
   useEffect(() => {
@@ -382,7 +440,7 @@ export default function ModalUpload({
 
   const onPickHint = (name) => {
     setUserFileName(name);
-    setNameHints([]);
+    // ชื่อจาก hint ส่วนใหญ่เป็นชื่อที่เคยใช้ → แจ้งเตือนซ้ำไว้เลย
     setNameExists(true);
     setNameError('ชื่อไฟล์นี้มีอยู่แล้ว กรุณาเปลี่ยนชื่อ');
   };
@@ -395,6 +453,7 @@ export default function ModalUpload({
       return;
     }
 
+    // STL เท่านั้นที่มี slicing params; ถ้าเป็น G-code จะไม่ส่ง slicing
     const materialMaybe = !isGcode ? material : undefined;
 
     // ส่ง prefix โครงใหม่: catalog/<MODEL>/<BaseName_VN>/
@@ -411,21 +470,17 @@ export default function ModalUpload({
         support,
         ...(materialMaybe ? { material: materialMaybe } : {}),
       },
-      ...(s3_prefix ? { s3_prefix } : {}), // ส่งเมื่อมี model/name ถูกต้อง
+      ...(s3_prefix ? { s3_prefix } : {}),
     };
 
     try {
       setPreparing(true);
-      const data = await api.post('/api/slicer/preview', payload);
+      const data = await api.post('/api/slicer/preview', payload, undefined, { timeout: 60000, retries: 0 });
 
       const gkFromApi =
         data.gcodeKey || data.gcode_key || data.gcodeId ||
         data?.gcode?.key || data?.gcode?.object_key ||
         data?.output?.gcode_key || data?.output?.key || null;
-
-      if (gkFromApi && isFinalKey(gkFromApi)) {
-        console.warn('Preview returned a finalized key from backend.');
-      }
 
       const gk = gkFromApi || (isGcode ? fileId : null);
 
@@ -435,13 +490,11 @@ export default function ModalUpload({
         try {
           const pres = await api.storage.presignGet(gk, false);
           gu = pres?.url || null;
-        } catch {
-          gu = null;
-        }
+        } catch { gu = null; }
       }
 
       setPreviewData({
-        snapshotUrl: data.snapshotUrl || data.preview_image_url || null,
+        snapshotUrl: data.snapshotUrl || data.preview_image_url || null, // (จะถูกแทนด้วยรูปจาก WebGL ตอน Confirm)
         printer: data.printer,
         settings: {
           infill : data.settings?.infill  ?? (isGcode ? 15 : Number(infill)),
@@ -460,6 +513,7 @@ export default function ModalUpload({
       });
       setPreviewOpen(true);
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error(err);
       setError(`Failed to call slicer/preview: ${err?.message || 'Unknown error'}`);
     } finally {
@@ -511,21 +565,20 @@ export default function ModalUpload({
       }
 
       const materialMaybe = !isGcode ? material : undefined;
-      try {
-        await api.post("/api/storage/preview/regenerate", null, { object_key: finalGcodeKey });
-      } catch (e) {
-        console.warn("preview regenerate failed:", e);
-      }
+
+      // พก snapshot จาก WebGL (data URL) ไปด้วย
+      const snapshotDataUrl =
+        payloadFromPreview?.thumb_data_url ||
+        payloadFromPreview?.snapshotUrl ||
+        null;
+
       const printPayload = {
-        ...payloadFromPreview,
+        ...payloadFromPreview,               // มี thumb_data_url / snapshotUrl อยู่แล้ว
         source: 'upload',
-        gcode_key   : finalGcodeKey,      // ไม่ใช่ staging/*
+        gcode_key   : finalGcodeKey,        // ไม่ใช่ staging/*
         original_key: isMesh ? (payloadFromPreview?.original_key || null) : (fileId || null),
         name: (userFileName || '').trim() || fileNameRaw || 'Unnamed',
         ...(materialMaybe ? { material: materialMaybe } : {}),
-        time_min  : payloadFromPreview?.time_min  ?? previewData?.result?.time_min  ?? previewData?.result?.timeMin  ?? undefined,
-        time_text : payloadFromPreview?.time_text ?? previewData?.result?.time_text ?? undefined,
-        filament_g: payloadFromPreview?.filament_g ?? previewData?.result?.filament_g ?? previewData?.result?.filamentG ?? undefined,
       };
 
       const printerIdRaw =
@@ -535,9 +588,9 @@ export default function ModalUpload({
         'prusa-core-one';
       const printerId = normalizePrinterId(printerIdRaw);
 
-      const job = await api.post('/api/print', printPayload, { printer_id: printerId });
+      const job = await api.post('/api/print', printPayload, { printer_id: printerId }, { timeout: 30000, retries: 0 });
 
-      // ส่งข้อมูลกลับให้หน้าหลัก
+      // ส่งข้อมูลกลับให้หน้าหลัก (พร้อมรูปจาก WebGL เพื่อโชว์ทันที)
       const timeMin   = printPayload?.time_min  ?? previewData?.result?.time_min ?? previewData?.result?.timeMin ?? null;
       const timeText  = printPayload?.time_text ?? previewData?.result?.time_text ?? null;
       const filamentG = printPayload?.filament_g ?? previewData?.result?.filament_g ?? previewData?.result?.filamentG ?? null;
@@ -556,7 +609,8 @@ export default function ModalUpload({
 
       onUploaded?.({
         name : settings.name,
-        thumb: null,
+        // ใส่ภาพจาก WebGL เพื่อให้คิวโชว์รูปทันที
+        thumb: snapshotDataUrl || null,
         stats: { timeMin, time_text: timeText, filament_g: filamentG },
         settings,
         template: {
@@ -593,6 +647,7 @@ export default function ModalUpload({
 
       return job;
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error(err);
       setConfirming(false);
 
@@ -636,26 +691,16 @@ export default function ModalUpload({
     return invalidByRegex ? 'Name must be like ModelName_V1' : '';
   })();
 
-  if (!isOpen && !previewOpen) return null;
-  
   return (
     <>
       {/* ซ่อนกล่องอัปโหลดเมื่อพรีวิวเปิด */}
       {!previewOpen && (
         <div className="modal-overlay" onClick={() => { if (!preparing && !confirming) onClose?.(); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="close-btn"
-              onClick={() => {
-                // ✅ Force reset แล้วปิดได้แน่นอน
-                setPreparing(false);
-                setConfirming(false);
-                onClose?.();
-              }}
-              aria-label="Close"
-            >
+            <button className="close-btn" onClick={() => { if (!preparing && !confirming) onClose?.(); }} aria-label="Close">
               <img src={process.env.PUBLIC_URL + '/icon/Close.png'} alt="" className="close-icon" />
             </button>
+
             <div className="upload-box">
               <div
                 className={`upload-area ${dragOver ? 'is-dragover' : ''}`}
@@ -670,7 +715,7 @@ export default function ModalUpload({
                 <img src={process.env.PUBLIC_URL + '/icon/Upload.png'} alt="" className="upload-icon" />
                 <div className="upload-text">
                   <strong>Choose a file or drag &amp; drop it here</strong>
-                  <p>Supported formats: STL, 3MF, OBJ, G-code</p>
+                  <p>Supported formats: STL, G-code</p>
                 </div>
                 <button className="browse-btn" onClick={openPicker} disabled={preparing || confirming}>
                   {preparing ? 'Preparing…' : 'Browse File'}
@@ -678,7 +723,8 @@ export default function ModalUpload({
                 <input
                   ref={inputRef}
                   type="file"
-                  accept=".stl,.3mf,.obj,.gcode,.gco,.gc"
+                  // ⛔ จำกัดเฉพาะ .stl และ .gcode/.gco/.gc
+                  accept=".stl,.gcode,.gco,.gc"
                   className="file-input-hidden"
                   onChange={onInputChange}
                   disabled={preparing || confirming}
@@ -750,14 +796,12 @@ export default function ModalUpload({
                         disabled={preparing || confirming}
                       />
                       {nameLoading && <div className="namebox-spinner" aria-hidden />}
-
                       {(nameFocus && userFileName.trim().length >= 2 && !!nameHints.length && !nameExists) && (
                         <ul className="namebox-hints" role="listbox">
                           {nameHints.map((n) => (
                             <li
                               key={n}
                               role="option"
-                              aria-selected="false"  // ✅ เพิ่มตาม ESLint a11y
                               onMouseDown={(e) => { e.preventDefault(); onPickHint(n); }}
                             >
                               {n}
@@ -777,30 +821,7 @@ export default function ModalUpload({
                     )}
                   </div>
 
-                  {/* Similar existing info (optional) */}
-                  {topSimilar && (
-                    <div
-                      className="form-row"
-                      style={{
-                        background:'#fafbfc',
-                        border:'1px solid #e5e7eb',
-                        borderRadius:12,
-                        padding:'10px 12px',
-                        marginTop: -6
-                      }}
-                    >
-                      <div style={{ fontSize:12, color:'#6b7280', marginBottom:6 }}>Similar to an existing upload:</div>
-                      <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', gap:'6px 12px', fontSize:14 }}>
-                        <div style={{ color:'#4b5563' }}>Name</div>
-                        <div style={{ fontWeight:700 }}>{topSimilar.name || topSimilar.file_name || topSimilar.filename}</div>
-                        {topSimilar?.model && (<><div style={{ color:'#4b5563' }}>Model</div><div>{topSimilar.model}</div></>)}
-                        {topSimilar?.stats?.timeMin && (<><div style={{ color:'#4b5563' }}>Time</div><div>{topSimilar.stats.timeMin} min</div></>)}
-                        {topSimilar?.stats?.filament_g && (<><div style={{ color:'#4b5563' }}>Filament</div><div>{topSimilar.stats.filament_g} g</div></>)}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Filament material — เฉพาะ STL/3MF/OBJ */}
+                  {/* Filament material — เฉพาะ STL */}
                   {!isGcode && (
                     <div className="form-row">
                       <label className="form-label">
@@ -814,11 +835,9 @@ export default function ModalUpload({
                         required
                         disabled={preparing || confirming}
                       >
-                        <option value="PLA">PLA</option>
-                        <option value="PETG">PETG</option>
-                        <option value="ABS">ABS</option>
-                        <option value="TPU">TPU</option>
-                        <option value="Nylon">Nylon</option>
+                        {MATERIAL_OPTIONS.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
                       </select>
                     </div>
                   )}
@@ -840,7 +859,7 @@ export default function ModalUpload({
                           max={100}
                           step={1}
                           value={infill}
-                          onChange={(e) => setInfill(Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0))))}
+                          onChange={(e) => applyInfill(e.target.value)}
                           onKeyDown={(e) => { if (['e','E','+','-','.'].includes(e.key)) e.preventDefault(); }}
                           title="0–100%"
                           disabled={preparing || confirming}
@@ -853,7 +872,7 @@ export default function ModalUpload({
                           <span className="req">*</span>
                         </label>
                         <div className="stepper">
-                          <button type="button" className="step-btn -minus" onClick={() => setWalls(Math.max(1, (walls || 0) - 1))} disabled={walls <= 1 || preparing || confirming}>−</button>
+                          <button type="button" className="step-btn -minus" onClick={() => stepWalls(-1)} disabled={walls <= 1 || preparing || confirming}>−</button>
                           <input
                             type="number"
                             inputMode="numeric"
@@ -863,24 +882,14 @@ export default function ModalUpload({
                             max={6}
                             step={1}
                             value={walls}
-                            onChange={(e) => {
-                              let n = Math.round(Number(e.target.value) || 0);
-                              if (!Number.isInteger(n) || n < 1 || n > 6) setWallsMsg('ต้องเป็นจำนวนเต็ม 1–6');
-                              else setWallsMsg('');
-                              setWalls(Math.max(1, Math.min(6, n)));
-                            }}
-                            onBlur={(e) => {
-                              let n = Math.round(Number(e.target.value) || 0);
-                              if (!Number.isInteger(n) || n < 1 || n > 6) setWallsMsg('ต้องเป็นจำนวนเต็ม 1–6');
-                              else setWallsMsg('');
-                              setWalls(Math.max(1, Math.min(6, n)));
-                            }}
+                            onChange={(e) => applyWalls(e.target.value, true)}
+                            onBlur={(e) => applyWalls(e.target.value, true)}
                             onKeyDown={(e) => { if (['e','E','+','-','.'].includes(e.key)) e.preventDefault(); }}
                             title="1–6"
                             aria-describedby="wallAssist"
                             disabled={preparing || confirming}
                           />
-                          <button type="button" className="step-btn -plus" onClick={() => setWalls(Math.min(6, (walls || 0) + 1))} disabled={walls >= 6 || preparing || confirming}>+</button>
+                          <button type="button" className="step-btn -plus" onClick={() => stepWalls(1)} disabled={walls >= 6 || preparing || confirming}>+</button>
                         </div>
                         <div className="assist" id="wallAssist" aria-live="polite">
                           <div className="calc">
