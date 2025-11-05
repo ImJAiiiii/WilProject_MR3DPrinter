@@ -166,11 +166,22 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
       thumbUrl = raw.preview_url;
     } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
+      // ถ้าเป็น path local (เช่น /images/3D.png) → ใช้ตรง ๆ
+      if (raw.preview_url.startsWith("/images/")) {
+        thumbUrl = raw.preview_url;
+      } else {
+        thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
+      }
     }
+
     if (!thumbUrl) {
       if (raw?.thumb) {
-        thumbUrl = toRawUrl(api.API_BASE, raw.thumb, token);
+        // เช่น catalog/...preview.png → ใช้ proxy ปกติ
+        if (raw.thumb.startsWith("/images/")) {
+          thumbUrl = raw.thumb;
+        } else {
+          thumbUrl = toRawUrl(api.API_BASE, raw.thumb, token);
+        }
       } else {
         const gk = raw?.gcode_key || (isGcode ? raw?.object_key : null);
         const { src, alt } = buildPreviewPair({
@@ -179,10 +190,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
           key: gk || raw?.object_key,
           cacheTag: raw?.updated_at || raw?.uploaded_at || raw?.mtime
         });
-        thumbUrl = src || "/icon/file.png";
+        thumbUrl = src || process.env.PUBLIC_URL + "/images/3D.png";
         thumbAlt = alt || "";
       }
     }
+
 
     const up = raw?.uploader || null;
     let uploaderName = (up?.name || up?.employee_id || "") || null;
