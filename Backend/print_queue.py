@@ -13,7 +13,7 @@ import uuid
 from threading import Lock
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple, Callable, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote  # ✅ add quote สำหรับ map object key → URL
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query
@@ -204,7 +204,7 @@ def _format_event(*,
     d = dict(data or {})
     if printer_id and not str(d.get("printer_id") or "").strip():
         d["printer_id"] = printer_id
-    nm = (d.get("name") or d.get("job_name") or d.get("filename") or d.get("file") or "").strip()
+    nm = (d.get("job_name") or d.get("name") or d.get("filename") or d.get("file") or "").strip()
     if nm:
         d.setdefault("name", nm)
         d.setdefault("job_name", nm)
@@ -305,10 +305,7 @@ AUTO_START_ON_ENQUEUE    = _env_bool("AUTO_START_ON_ENQUEUE", True)
 RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
 ALLOW_ADMIN_HEADER       = _env_bool("ALLOW_ADMIN_HEADER", True)
 
-# === NEW: Bed-empty gating toggles ===========================================
-REQUIRE_BED_EMPTY = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
-BED_EMPTY_MAX_AGE_SEC = int(os.getenv("BED_EMPTY_MAX_AGE_SEC") or "300")
-
+# === Preview / PNG render params =============================================
 AUTO_PREVIEW_ON_ENQUEUE = _env_bool("AUTO_PREVIEW_ON_ENQUEUE", True)
 PREVIEW_HIDE_TRAVEL     = _env_bool("SLICER_PREVIEW_HIDE_TRAVEL", True)
 PREVIEW_DPI             = int(os.getenv("SLICER_PREVIEW_DPI") or "500")
@@ -336,7 +333,8 @@ try:
 except Exception:
     OCTO_TIMEOUT = 30.0
 
-ALLOWED_SOURCE = {"upload", "history", "storage"}
+# ✅ เพิ่มแหล่งที่มาที่ใช้จริง (unity/catalog/user_history)
+ALLOWED_SOURCE = {"upload", "history", "storage", "catalog", "user_history", "unity"}
 
 # ==== Bed-empty gate ====
 def _env_int(name: str, default: int) -> int:
@@ -345,6 +343,7 @@ def _env_int(name: str, default: int) -> int:
     except Exception:
         return int(default)
 
+# ✅ ใช้ตัวเดียวให้ชัดเจน (ลบตัวแปรซ้ำก่อนหน้าออก)
 REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
 BED_EMPTY_MAX_AGE_SEC = _env_int("BED_EMPTY_MAX_AGE_SEC", 300)
 
@@ -375,7 +374,7 @@ async def _bed_empty_recent_async(printer_id: str) -> bool:
     except Exception:
         logger.exception("[QUEUE] bed-status check failed")
         return False
-    
+
 def status_order_expr():
     return case(
         (PrintJob.status.in_(("processing", "printing")), 0),
@@ -433,6 +432,17 @@ def _decorate_employee_name(db: Session, jobs: List[PrintJob]) -> Dict[str, str]
         name_map.setdefault(eid, eid)
     return name_map
 
+# ✅ ช่วย map thumb (object key) → URL ใช้งานได้จริง
+_HTTP_RE = re.compile(r"^https?://", re.I)
+def _thumb_to_url(val: Optional[str]) -> Optional[str]:
+    s = (val or "").strip()
+    if not s:
+        return None
+    if _HTTP_RE.match(s):
+        return s
+    # เดาว่าเป็น object key ใน MinIO → ให้โหลดผ่าน proxy /files/raw
+    return f"/files/raw?object_key={quote(s, safe='')}"
+
 def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[Dict[str, str]] = None) -> PrintJobOut:
     j_source = (getattr(job, "source", None) or "").strip().lower()
     if j_source not in ALLOWED_SOURCE:
@@ -446,9 +456,20 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
         ]}
         payload["source"] = j_source
         o = PrintJobOut.model_validate(payload)
+
+    # ✅ ให้ FE ยืนยันยกเลิกได้เฉพาะของตัวเอง/manager
     ok, _ = _can_cancel_with_reason(current_user, job)
     if hasattr(o, "me_can_cancel"):
         o.me_can_cancel = ok
+
+    # ✅ แปลง thumb เป็น URL ทุกครั้ง (งานจาก Unity/Storage จะขึ้นรูปเหมือนเว็บ)
+    try:
+        if hasattr(o, "thumb") and getattr(o, "thumb", None):
+            o.thumb = _thumb_to_url(o.thumb)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    # เติมชื่อพนักงานถ้ามีสคีมา
     if hasattr(o, "employee_name"):
         if name_map is not None:
             o.employee_name = name_map.get(_emp(job.employee_id), _emp(job.employee_id))
@@ -980,10 +1001,10 @@ def _bed_empty_recent_sync(printer_id: str) -> bool:
     """
     ดึงสถานะเตียงล่าสุดจาก notifications service
     ยอมให้ผ่านเมื่อ:
-      - ปิด REQUIRE_BED_EMPTY หรือ
+      - ปิด REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT หรือ
       - age_sec <= BED_EMPTY_MAX_AGE_SEC
     """
-    if not REQUIRE_BED_EMPTY:
+    if not REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:  # ✅ ใช้ชื่อตัวแปรเดียว
         return True
     if not ADMIN_TOKEN:
         logger.warning("[QUEUE] bed-gate: ADMIN_TOKEN missing -> block")
@@ -1114,7 +1135,7 @@ def _enqueue_job(
 
     gk = (gcode_final or gcode_path_in or gcode_key_in)
     pkey = _preview_key_for(gk) if gk else None
-    job_thumb = payload.thumb or pkey
+    job_thumb = payload.thumb or pkey  # ✅ เซ็ตเป็น object key ไปก่อน เดี๋ยวตอนส่งออก map เป็น URL ให้
 
     if AUTO_PREVIEW_ON_ENQUEUE and gk:
         def _bg_render():
@@ -1291,7 +1312,7 @@ def current_job_for_printer(
             return CurrentJobOut(
                 queue_number=qnum,
                 file_name=cur.name or "(Unknown)",
-                thumbnail_url=cur.thumb or "/images/placeholder-model.png",
+                thumbnail_url=_thumb_to_url(cur.thumb) or "/images/placeholder-model.png",  # ✅ map เป็น URL เสมอ
                 job_id=cur.id,
                 status=("processing" if cur.status == "processing" else cur.status),
                 started_at=cur.started_at,
@@ -1531,6 +1552,7 @@ def internal_process_next(
     db: Session = Depends(get_db),
     x_admin_token: str = Header(default=""),
     x_reason: str = Header(default=""),
+    request: Request = None,  # ✅ รับ request จริงเพื่ออ่าน header
 ):
     _check_admin_token(x_admin_token)
     pid = _norm_printer_id(printer_id)

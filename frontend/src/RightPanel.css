@@ -45,8 +45,8 @@
   gap: 6px;
   margin-bottom: 6px;
 }
-.card-header.left{ justify-content:flex-start; }   /* ชิดซ้ายสำหรับ Nozzle/Bed */
-.card-header.center{ justify-content:center; }     /* กึ่งกลางสำหรับ Speed/Time/Material */
+.card-header.left{ justify-content:flex-start; }
+.card-header.center{ justify-content:center; }
 
 .card-header .icon{
   width: clamp(16px, 1.8vw, 22px);
@@ -94,7 +94,7 @@
   border-radius: 1px;
 }
 
-/* วงกลมวัสดุ */
+/* วงกลมวัสดุ (เดิม) */
 .material-circle{
   --size: clamp(64px, 6vw, 96px);
   width: var(--size);
@@ -342,7 +342,8 @@
   outline:2px solid rgba(11,94,207,.35);
   outline-offset:2px;
 }
-/* RightPanel.css – ส่วนของ Material popover */
+
+/* ---------- Material popover ---------- */
 .material-card { position: relative; }            /* กัน popover หลุดเลเยอร์ */
 .mat-trigger { display: none; }
 .mat-dot{width:28px;height:28px;border-radius:50%;border:1.5px solid #D1D5DB}
@@ -382,9 +383,10 @@
 .mat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px 16px}
 .mat-swatch{width:34px;height:34px;border-radius:50%;border:1.5px solid #D1D5DB;cursor:pointer}
 .mat-swatch.is-selected{outline:3px solid rgba(0,94,255,.25);outline-offset:2px;border-color:#5aa2ff}
+
 /* วงกลมใหญ่สำหรับปุ่ม Material (กดเพื่อเปิด popover) */
 .mat-circle{
-  width: 120px;              /* ปรับขนาดได้ */
+  width: 120px;
   height: 120px;
   border-radius: 50%;
   border: 2px solid #cfe2ff;
@@ -397,7 +399,7 @@
   font-size: 20px;
   cursor: pointer;
   user-select: none;
-  margin: 8px auto 0;        /* ให้อยู่กึ่งกลางการ์ด */
+  margin: 8px auto 0;
   transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease;
 }
 
@@ -423,3 +425,40 @@
 @media (max-width: 640px){
   .mat-circle{ width: 96px; height: 96px; font-size: 18px; }
 }
+
+/* ========== ⬇️ ใหม่: Disabled & Viewer-only states ========== */
+
+/* ทำให้ทั้งแผงอยู่ในโหมดดูอย่างเดียว (ใช้คู่กับ .right-panel.viewer-only ใน DOM) */
+.viewer-only .clickable{ cursor: default; }
+.viewer-only .hoverable:hover{ transform: none; background: #fff; border-color: transparent; }
+.viewer-only .card{ opacity:.72; }
+.viewer-only .card .label,
+.viewer-only .card .value,
+.viewer-only .card .target{ color:#666; }
+
+/* ปิดการโต้ตอบทุกอย่างในการ์ดที่ถูกระบุ disabled (JS ใส่ class="card ... disabled") */
+.card.disabled{ opacity:.72; }
+.card.disabled *{ pointer-events:none !important; }
+.card[aria-disabled="true"] *{ pointer-events:none !important; }
+.card.disabled .clickable,
+.viewer-only .clickable{ pointer-events:none; }
+
+/* ปิดปุ่มความเร็วและ material เมื่อ lock */
+.viewer-only .speed-arrow,
+.card.disabled .speed-arrow{ cursor:not-allowed; }
+.viewer-only .mat-circle,
+.card.disabled .mat-circle{
+  cursor: default;
+  transform:none !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  border-color: #e5e7eb;
+}
+
+/* ปิดเอฟเฟกต์ hover บนไอคอนหัวการ์ดเมื่อ lock */
+.viewer-only .card .card-header .icon,
+.card.disabled .card-header .icon{
+  filter: none !important;
+}
+
+/* กันผู้ใช้ลากปุ่ม/รูปโดยไม่ตั้งใจ */
+.card img, .mat-circle img{ user-select:none; -webkit-user-drag:none; }

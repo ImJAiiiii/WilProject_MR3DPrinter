@@ -5,6 +5,9 @@ import PrinterStatus from "../PrinterStatus";
 import VideoStream from "../VideoStream";
 import RightPanel from "../RightPanel";
 import { useApi } from "../api";
+import { useAuth } from "../auth/AuthContext";
+
+const NO_IMAGE_URL = "/icon/noimage.png";
 
 /**
  * MonitorPage
@@ -16,6 +19,7 @@ export default function MonitorPage({
   printerId = process.env.REACT_APP_PRINTER_ID || "prusa-core-one",
 }) {
   const api = useApi();
+  const { user } = useAuth() || {};
 
   // ---- state หลัก ----
   // เริ่มต้นให้รีล: ยังไม่เชื่อม → ออฟไลน์/รอเชื่อมต่อ
@@ -27,8 +31,9 @@ export default function MonitorPage({
   const [startedAt, setStartedAt] = useState(null);                // ISO string | null
   const [remainingSeconds, setRemainingSeconds] = useState(null);  // วินาที | null
 
-  const [currentJob, setCurrentJob] = useState(null);              // { name, thumb, durationMin?, startedAt?, completion? }
+  const [currentJob, setCurrentJob] = useState(null);              // { name, thumb, durationMin?, startedAt?, completion?, employee_id? }
   const [currentQueueNumber, setCurrentQueueNumber] = useState(null);
+  const [currentOwnerEmp, setCurrentOwnerEmp] = useState(null);    // employee_id เจ้าของงาน
 
   // material ของงานปัจจุบัน (จาก OctoPrint/BE)
   const [material, setMaterial] = useState(null);
@@ -210,10 +215,11 @@ export default function MonitorPage({
 
         setCurrentJob({
           name: fileName || "File Name",
-          thumb: "/images/placeholder-model.png",
+          thumb: NO_IMAGE_URL, // ใช้รูปสำรองเป็นค่าเริ่มต้น
           durationMin: estimatedTotal ? Math.round(estimatedTotal / 60) : undefined,
           startedAt: printTime > 0 ? new Date(Date.now() - printTime * 1000).toISOString() : undefined,
           completion,
+          employee_id: currentOwnerEmp || null, // ยังไม่รู้จาก Octo → รอ fallback เติม
         });
 
         // ถ้ามี queue number ที่ backend อื่นส่งมา สามารถเซ็ตได้ที่นี่:
@@ -233,7 +239,7 @@ export default function MonitorPage({
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [api, printerId, printState]);
+  }, [api, printerId, printState, currentOwnerEmp]);
 
   // ---- Fallback: ถ้า OctoPrint ไม่ส่งเวลา ให้ใช้ข้อมูลจาก BE current-job ----
   useEffect(() => {
@@ -249,7 +255,7 @@ export default function MonitorPage({
         const cj = await api.queue.current(printerId, { timeout: 8000 });
         if (aborted || !mountedRef.current) return;
 
-        // cj: { queue_number, file_name, thumbnail_url, job_id, status, started_at, time_min, remaining_min, material?, template? }
+        // cj: { queue_number, file_name, thumbnail_url, job_id, status, started_at, time_min, remaining_min, material?, template?, employee_id? }
         const tm = Number(cj?.time_min ?? cj?.timeMin ?? 0);
         const stIso = cj?.started_at ?? cj?.startedAt ?? null;
         const remMin = cj?.remaining_min ?? cj?.remainingMin ?? null;
@@ -274,14 +280,16 @@ export default function MonitorPage({
           setRemainingSeconds(Math.max(0, tm * 60 - elapsed));
         }
 
-        // ตั้งชื่อ/รูป และ queue number
+        // ตั้งชื่อ/รูป และ queue number + owner
         setCurrentJob((prev) => ({
           name: cj?.file_name || prev?.name || "File Name",
-          thumb: cj?.thumbnail_url || prev?.thumb || "/images/placeholder-model.png",
+          thumb: cj?.thumbnail_url || prev?.thumb || NO_IMAGE_URL,
           durationMin: tm || prev?.durationMin,
           startedAt: stIso || prev?.startedAt,
           completion: prev?.completion, // ไม่มี % จาก BE ก็รักษาค่าเดิมไว้
+          employee_id: cj?.employee_id ?? prev?.employee_id ?? null,
         }));
+        if (cj?.employee_id) setCurrentOwnerEmp(String(cj.employee_id));
         if (cj?.queue_number != null) setCurrentQueueNumber(String(cj.queue_number).padStart(3, "0"));
       } catch {
         // เงียบไว้
@@ -291,6 +299,32 @@ export default function MonitorPage({
     runFallback();
     return () => { aborted = true; };
   }, [api, printerId, printState, estimatedSeconds, startedAt]);
+
+  // ถ้ายังไม่มี owner จาก fallback ให้ลองถามเป็นครั้งคราว (น้ำหนักเบา)
+  useEffect(() => {
+    let stop = false;
+    async function fillOwnerIfMissing() {
+      if (printState !== "printing") return;
+      if (currentOwnerEmp) return;
+      try {
+        const cj = await api.queue.current(printerId, { timeout: 5000 });
+        if (stop) return;
+        if (cj?.employee_id) {
+          setCurrentOwnerEmp(String(cj.employee_id));
+          setCurrentJob((prev) => prev ? { ...prev, employee_id: String(cj.employee_id) } : prev);
+        }
+      } catch {}
+    }
+    fillOwnerIfMissing();
+    return () => { stop = true; };
+  }, [api, printerId, printState, currentOwnerEmp]);
+
+  // ---- คำนวณสิทธิ์ควบคุม (เฉพาะเจ้าของงานหรือผู้จัดการ) ----
+  const myEmp = String(user?.employee_id ?? user?.id ?? "");
+  const isManager = !!(user?.can_manage_queue || user?.is_manager || user?.role === "manager");
+  const ownerEmp = String(currentJob?.employee_id ?? currentOwnerEmp ?? "");
+  const isMine = !!myEmp && !!ownerEmp && myEmp === ownerEmp;
+  const canControl = isManager || isMine;
 
   // ---- จัดรูป remainingTime เป็นข้อความ แสดงใน RightPanel ----
   const remainingText = useMemo(() => {
@@ -311,8 +345,9 @@ export default function MonitorPage({
             estimatedSeconds={estimatedSeconds}
             startedAt={startedAt}
             state={printState}           // printing | paused | ready | error | offline | idle
-            job={currentJob}             // { name, thumb, durationMin?, startedAt?, completion? }
+            job={currentJob}             // { name, thumb, durationMin?, startedAt?, completion?, employee_id? }
             queueNumber={currentQueueNumber}
+            canControl={canControl}
           />
         </div>
       </div>
@@ -324,6 +359,7 @@ export default function MonitorPage({
           printerId={printerId}
           remainingTime={remainingText}
           material={material}
+          canControl={canControl}
         />
       </div>
     </div>

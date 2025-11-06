@@ -5,6 +5,8 @@ import UserPrintHistoryModal from "../UserPrintHistoryModal";
 import { useApi } from "../api";
 import { useAuth } from "../auth/AuthContext";
 
+const NO_IMAGE_URL = "/icon/noimage.png";
+
 export default function PrintingPage({
   jobs = [],
   currentUserId,
@@ -184,11 +186,13 @@ export default function PrintingPage({
     requestAnimationFrame(() => gotoStorage?.());
   };
 
-  const placeholderImg = process.env.PUBLIC_URL + "/images/placeholder-model.png";
-  const fallbackImg = process.env.PUBLIC_URL + "/images/3D.png";
+  // ใช้รูปสำรองเดียว
   const onImgError = (e) => {
+    // กันลูปกรณี noimage.png พังด้วย
+    if (e.currentTarget.dataset.fallback === "1") return;
+    e.currentTarget.dataset.fallback = "1";
     e.currentTarget.onerror = null;
-    e.currentTarget.src = fallbackImg;
+    e.currentTarget.src = NO_IMAGE_URL;
   };
 
   const statusText = (s) => {
@@ -346,7 +350,7 @@ export default function PrintingPage({
 
       // 5) ค่าอื่น ๆ/placeholder
       if (t && !isHttpUrl(t) && !isObjectKey(t)) return t;
-      return placeholderImg;
+      return NO_IMAGE_URL;
     }
 
     // ----- งานทั่วไป (เดิม) -----
@@ -373,7 +377,7 @@ export default function PrintingPage({
       if (k) return toRawUrl(k, cacheTag);
     }
 
-    return job?.thumb || placeholderImg;
+    return job?.thumb || NO_IMAGE_URL;
   };
 
   /* ===================== Drag & Drop Reorder (manager) ===================== */
@@ -531,7 +535,7 @@ export default function PrintingPage({
                   {isMine && <span className="own-bar" aria-hidden />}
                   <div className="part-cell">
                     <img
-                      src={imgSrc}
+                      src={imgSrc || NO_IMAGE_URL}
                       alt="part"
                       className="part-img"
                       onError={onImgError}
