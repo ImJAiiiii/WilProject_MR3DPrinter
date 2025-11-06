@@ -11,8 +11,7 @@ import "./RightPanel.css";
 import { useApi } from "./api";
 
 const DEFAULTS = { nozzle: 220, bed: 65, feed: 100 };
-const MIN_FEED = 10,
-  MAX_FEED = 200;
+const MIN_FEED = 10, MAX_FEED = 200;
 
 // ---------- Material options ----------
 const MATERIAL_TYPES = ["PLA", "ABS", "PETG", "ASA", "TPU"];
@@ -97,18 +96,9 @@ function TemperatureModal({
   };
 
   const onKeyDown = (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commit();
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      nudge(+1);
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      nudge(-1);
-    }
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); nudge(+1); }
+    if (e.key === "ArrowDown") { e.preventDefault(); nudge(-1); }
   };
 
   return (
@@ -143,18 +133,10 @@ function TemperatureModal({
         />
 
         <div className="temp-controls">
-          <button type="button" className="temp-btn" onClick={() => nudge(-5)} disabled={busy}>
-            −5
-          </button>
-          <button type="button" className="temp-btn" onClick={() => nudge(+5)} disabled={busy}>
-            +5
-          </button>
-          <button type="button" className="temp-btn" onClick={() => nudge(-30)} disabled={busy}>
-            −30
-          </button>
-          <button type="button" className="temp-btn" onClick={() => nudge(+30)} disabled={busy}>
-            +30
-          </button>
+          <button type="button" className="temp-btn" onClick={() => nudge(-5)} disabled={busy}>−5</button>
+          <button type="button" className="temp-btn" onClick={() => nudge(+5)} disabled={busy}>+5</button>
+          <button type="button" className="temp-btn" onClick={() => nudge(-30)} disabled={busy}>−30</button>
+          <button type="button" className="temp-btn" onClick={() => nudge(+30)} disabled={busy}>+30</button>
         </div>
 
         <button type="button" className="done-btn" onClick={commit} disabled={busy}>
@@ -169,6 +151,8 @@ function TemperatureModal({
 export default function RightPanel({
   printerId,
   remainingTime: externalRemainingTime,
+  material,           // optional text from parent
+  canControl = false, // <<< NEW: สิทธิ์ควบคุมจาก MonitorPage
 }) {
   const api = useApi();
 
@@ -194,29 +178,20 @@ export default function RightPanel({
   const [matOpen, setMatOpen] = useState(false);
   const matAnchorRef = useRef(null);
   const popRef = useRef(null);
-  const [matPos, setMatPos] = useState({
-    top: 0,
-    left: 0,
-    placement: "bottom",
-    arrowX: 40,
-  });
+  const [matPos, setMatPos] = useState({ top: 0, left: 0, placement: "bottom", arrowX: 40 });
 
   // ================= Material popover position =================
   function computeMaterialPopoverPosition(anchorEl, popEl) {
-    const GAP = 8; // space between anchor <-> pop
-    const PAD = 8; // viewport padding
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const GAP = 8, PAD = 8;
+    const vw = window.innerWidth, vh = window.innerHeight;
 
     const ar = anchorEl.getBoundingClientRect();
     const pw = Math.max(1, popEl.offsetWidth || 280);
     const ph = Math.max(1, popEl.offsetHeight || 240);
 
-    // start centered with the trigger
     let left = ar.left + ar.width / 2 - pw / 2;
     left = Math.max(PAD, Math.min(vw - PAD - pw, left));
 
-    // bottom or top
     let placement = "bottom";
     let top = ar.bottom + GAP;
     const canPlaceBottom = top + ph <= vh - PAD;
@@ -226,11 +201,9 @@ export default function RightPanel({
       top = ar.top - GAP - ph;
       placement = "top";
     } else if (!canPlaceBottom && !canPlaceTop) {
-      // extremely tight viewport: clamp inside
       top = Math.max(PAD, Math.min(vh - PAD - ph, top));
     }
 
-    // arrow: point to anchor center but clamp inside pop width
     const anchorCenterX = ar.left + ar.width / 2;
     let arrowX = anchorCenterX - left;
     arrowX = Math.max(12, Math.min(pw - 12, arrowX));
@@ -243,12 +216,10 @@ export default function RightPanel({
   useLayoutEffect(() => {
     if (!matOpen) return;
     const place = () => {
-      const a = matAnchorRef.current,
-        p = popRef.current;
+      const a = matAnchorRef.current, p = popRef.current;
       if (!a || !p) return;
       setMatPos(computeMaterialPopoverPosition(a, p));
     };
-    // wait 1 frame so DOM has real size
     const raf = requestAnimationFrame(place);
 
     const re = () => place();
@@ -294,18 +265,15 @@ export default function RightPanel({
   // polling temps
   useEffect(() => {
     if (!printerId) return;
-    let stop = false,
-      to;
+    let stop = false, to;
     const num = (v) => (Number.isFinite(+v) ? Math.round(+v) : null);
     const tick = async () => {
       try {
         const r = await api.printer.temps(printerId, { timeoutMs: 12000 });
         const noz = r?.nozzle ?? r?.temperature?.tool0 ?? {};
         const bd = r?.bed ?? r?.temperature?.bed ?? {};
-        const nAct = num(noz.actual),
-          nTgt = num(noz.target);
-        const bAct = num(bd.actual),
-          bTgt = num(bd.target);
+        const nAct = num(noz.actual), nTgt = num(noz.target);
+        const bAct = num(bd.actual), bTgt = num(bd.target);
         if (nAct !== null) setNozzleActual(nAct);
         if (bAct !== null) setBedActual(bAct);
         if (nTgt !== null && nTgt > 0) setNozzleTarget(nTgt);
@@ -316,27 +284,30 @@ export default function RightPanel({
       }
     };
     tick();
-    return () => {
-      stop = true;
-      if (to) clearTimeout(to);
-    };
+    return () => { stop = true; if (to) clearTimeout(to); };
   }, [api, printerId]);
 
-  // open/close temp modal
+  // open/close temp modal (respect canControl)
   const openNozzle = () => {
+    if (!canControl) return;
     setActiveModal("nozzle");
     setDraftTemp(nozzleTarget || DEFAULTS.nozzle);
   };
   const openBed = () => {
+    if (!canControl) return;
     setActiveModal("bed");
     setDraftTemp(bedTarget || DEFAULTS.bed);
   };
   const closeModal = () => !modalBusy && setActiveModal(null);
-  const kbOpen = (e, fn) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), fn());
+  const kbOpen = (e, fn) => {
+    if (!canControl) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); }
+  };
 
-  // commit temps
+  // commit temps (respect canControl)
   const commitDraft = useCallback(
     async (finalValue) => {
+      if (!canControl) return;
       if (!printerId) return;
       setModalBusy(true);
       try {
@@ -363,20 +334,19 @@ export default function RightPanel({
         alert(e?.message || "Failed to set temperature");
       }
     },
-    [activeModal, api, printerId, nozzleTarget, bedTarget]
+    [activeModal, api, printerId, nozzleTarget, bedTarget, canControl]
   );
 
-  // speed
+  // speed (respect canControl)
   const changeFeed = async (next) => {
+    if (!canControl) return;
     const clamped = Math.max(MIN_FEED, Math.min(MAX_FEED, next));
     if (clamped === feedrate || speedBusy) return;
     setSpeedBusy(true);
     try {
       await api.printer.setFeedrate(printerId, clamped, { timeoutMs: 8000 });
       setFeedrate(clamped);
-      try {
-        localStorage.setItem("printer_feedrate", String(clamped));
-      } catch {}
+      try { localStorage.setItem("printer_feedrate", String(clamped)); } catch {}
     } catch (e) {
       alert(e?.message || "Failed to change speed");
     } finally {
@@ -386,36 +356,29 @@ export default function RightPanel({
   const stepFeed = (d) => changeFeed(feedrate + d);
   const holdTimerRef = useRef(null);
   const startHold = (d) => {
+    if (!canControl) return;
     stepFeed(d);
     clearInterval(holdTimerRef.current);
     holdTimerRef.current = setInterval(() => stepFeed(d), 120);
   };
-  const stopHold = () => {
-    clearInterval(holdTimerRef.current);
-    holdTimerRef.current = null;
-  };
+  const stopHold = () => { clearInterval(holdTimerRef.current); holdTimerRef.current = null; };
   useEffect(() => () => stopHold(), []);
   const onSpeedKey = (e) => {
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      stepFeed(-1);
-    }
-    if (e.key === "ArrowRight") {
-      e.preventDefault();
-      stepFeed(+1);
-    }
+    if (!canControl) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); stepFeed(-1); }
+    if (e.key === "ArrowRight"){ e.preventDefault(); stepFeed(+1); }
   };
 
-  // material selections (เลือกแล้วปิด)
+  // material selections (respect canControl)
   const pickType = (t) => {
+    if (!canControl) return;
     setMatType(t);
-    try {
-      localStorage.setItem("mat_type", t);
-    } catch {}
+    try { localStorage.setItem("mat_type", t); } catch {}
     setMatOpen(false);
     matAnchorRef.current?.focus();
   };
   const pickColor = (hex, text) => {
+    if (!canControl) return;
     setMatColor(hex);
     setMatText(text || "#111");
     try {
@@ -427,18 +390,21 @@ export default function RightPanel({
   };
 
   const remainingTime = useMemo(() => externalRemainingTime ?? "-", [externalRemainingTime]);
+  const materialText = (material && String(material)) || matType;
 
   return (
-    <div className="right-panel">
+    <div className={`right-panel ${canControl ? "" : "viewer-only"}`}>
       {/* Nozzle + Bed */}
       <div className="temp-row">
         <div
-          className="card nozzle-card hoverable clickable"
+          className={`card nozzle-card hoverable ${canControl ? "clickable" : "disabled"}`}
           role="button"
           tabIndex={0}
           onClick={openNozzle}
           onKeyDown={(e) => kbOpen(e, openNozzle)}
           aria-label="Adjust nozzle temperature"
+          aria-disabled={!canControl}
+          title={canControl ? "Adjust nozzle temperature" : "View only"}
         >
           <div className="card-header left">
             <img src="/icon/arrow.png" alt="" className="icon" />
@@ -449,12 +415,14 @@ export default function RightPanel({
         </div>
 
         <div
-          className="card bed-card hoverable clickable"
+          className={`card bed-card hoverable ${canControl ? "clickable" : "disabled"}`}
           role="button"
           tabIndex={0}
           onClick={openBed}
           onKeyDown={(e) => kbOpen(e, openBed)}
           aria-label="Adjust bed temperature"
+          aria-disabled={!canControl}
+          title={canControl ? "Adjust bed temperature" : "View only"}
         >
           <div className="card-header left">
             <img src="/icon/arrow.png" alt="" className="icon" />
@@ -467,11 +435,13 @@ export default function RightPanel({
 
       {/* Speed */}
       <div
-        className={`card speed-card hoverable ${speedBusy ? "is-busy" : ""}`}
+        className={`card speed-card hoverable ${speedBusy ? "is-busy" : ""} ${canControl ? "" : "disabled"}`}
         role="group"
         aria-label="Speed"
+        aria-disabled={!canControl}
         tabIndex={0}
         onKeyDown={onSpeedKey}
+        title={canControl ? "Adjust speed" : "View only"}
       >
         <button
           type="button"
@@ -483,7 +453,7 @@ export default function RightPanel({
           onMouseLeave={stopHold}
           onTouchEnd={stopHold}
           onClick={() => stepFeed(-1)}
-          disabled={speedBusy || feedrate <= MIN_FEED}
+          disabled={!canControl || speedBusy || feedrate <= MIN_FEED}
         >
           ‹
         </button>
@@ -505,7 +475,7 @@ export default function RightPanel({
           onMouseLeave={stopHold}
           onTouchEnd={stopHold}
           onClick={() => stepFeed(+1)}
-          disabled={speedBusy || feedrate >= MAX_FEED}
+          disabled={!canControl || speedBusy || feedrate >= MAX_FEED}
         >
           ›
         </button>
@@ -521,7 +491,7 @@ export default function RightPanel({
           <div className="value">{remainingTime}</div>
         </div>
 
-        <div className="card material-card" style={{ position: "relative" }}>
+        <div className={`card material-card ${canControl ? "" : "disabled"}`} style={{ position: "relative" }}>
           <div className="card-header center">
             <img src="/icon/Material.png" alt="" className="icon" />
             <div className="label">Material</div>
@@ -531,24 +501,22 @@ export default function RightPanel({
           <button
             ref={matAnchorRef}
             className="mat-circle"
-            onClick={() => setMatOpen(v => !v)}
+            onClick={() => canControl && setMatOpen(v => !v)}
             aria-haspopup="dialog"
             aria-expanded={matOpen}
-            style={{
-              background: matColor,
-              color: matText,
-            }}
+            aria-disabled={!canControl}
+            disabled={!canControl}
+            title={canControl ? "Pick material" : "View only"}
+            style={{ background: matColor, color: matText }}
           >
-            {matType}
+            {(material && String(material)) || matType}
           </button>
 
-          {/* Popover (fixed positioning from computed state) */}
-          {matOpen && (
+          {/* Popover */}
+          {canControl && matOpen && (
             <div
               ref={popRef}
-              className={`mat-popover ${
-                matPos.placement === "top" ? "is-top" : "is-bottom"
-              }`}
+              className={`mat-popover ${matPos.placement === "top" ? "is-top" : "is-bottom"}`}
               role="dialog"
               aria-label="Material picker"
               style={{
@@ -564,14 +532,7 @@ export default function RightPanel({
                     key={t}
                     className={`mat-type ${t === matType ? "is-active" : ""}`}
                     aria-pressed={t === matType}
-                    onClick={() => {
-                      setMatType(t);
-                      try {
-                        localStorage.setItem("mat_type", t);
-                      } catch {}
-                      setMatOpen(false);
-                      matAnchorRef.current?.focus();
-                    }}
+                    onClick={() => pickType(t)}
                   >
                     {t}
                   </button>
@@ -582,8 +543,7 @@ export default function RightPanel({
 
               <div className="mat-grid" role="listbox" aria-label="Material color">
                 {MATERIAL_SWATCHES.map((s) => {
-                  const selected =
-                    (matColor || "").toLowerCase() === s.hex.toLowerCase();
+                  const selected = (matColor || "").toLowerCase() === s.hex.toLowerCase();
                   return (
                     <button
                       key={s.hex}
@@ -591,16 +551,7 @@ export default function RightPanel({
                       className={`mat-swatch ${selected ? "is-selected" : ""}`}
                       aria-selected={selected}
                       style={{ background: s.hex }}
-                      onClick={() => {
-                        setMatColor(s.hex);
-                        setMatText(s.text || "#111");
-                        try {
-                          localStorage.setItem("mat_color", s.hex);
-                          localStorage.setItem("mat_text", s.text || "#111");
-                        } catch {}
-                        setMatOpen(false);
-                        matAnchorRef.current?.focus();
-                      }}
+                      onClick={() => pickColor(s.hex, s.text)}
                     />
                   );
                 })}
@@ -610,8 +561,8 @@ export default function RightPanel({
         </div>
       </div>
 
-      {/* Temp modal */}
-      {activeModal && (
+      {/* Temp modal — render เฉพาะเมื่อควบคุมได้ */}
+      {canControl && activeModal && (
         <TemperatureModal
           title={activeModal === "nozzle" ? "Nozzle Temperature" : "Bed Temperature"}
           draft={draftTemp}
