@@ -17,6 +17,9 @@ export default function MonitorPage({
 }) {
   const api = useApi();
 
+  // ✅ ใช้รูป fallback ภายในไฟล์นี้ (ไม่สร้างไฟล์ใหม่)
+  const NO_IMAGE_URL = "/icon/noimage.png";
+
   // ---- state หลัก ----
   // เริ่มต้นให้รีล: ยังไม่เชื่อม → ออฟไลน์/รอเชื่อมต่อ
   const [printerOnline, setPrinterOnline] = useState(false);
@@ -208,9 +211,10 @@ export default function MonitorPage({
             : null
         );
 
+        // ✅ ใช้รูป fallback เสมอเมื่อไม่รู้ URL ภาพ
         setCurrentJob({
           name: fileName || "File Name",
-          thumb: "/images/placeholder-model.png",
+          thumb: NO_IMAGE_URL,
           durationMin: estimatedTotal ? Math.round(estimatedTotal / 60) : undefined,
           startedAt: printTime > 0 ? new Date(Date.now() - printTime * 1000).toISOString() : undefined,
           completion,
@@ -277,7 +281,8 @@ export default function MonitorPage({
         // ตั้งชื่อ/รูป และ queue number
         setCurrentJob((prev) => ({
           name: cj?.file_name || prev?.name || "File Name",
-          thumb: cj?.thumbnail_url || prev?.thumb || "/images/placeholder-model.png",
+          // ✅ ถ้า BE ไม่มี thumbnail_url → ใช้รูป fallback
+          thumb: cj?.thumbnail_url || prev?.thumb || NO_IMAGE_URL,
           durationMin: tm || prev?.durationMin,
           startedAt: stIso || prev?.startedAt,
           completion: prev?.completion, // ไม่มี % จาก BE ก็รักษาค่าเดิมไว้

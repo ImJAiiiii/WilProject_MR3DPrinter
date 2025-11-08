@@ -9,10 +9,9 @@ import { useAuth } from "../auth/AuthContext";
  *  - slicer.sliceFromStorage({ objectKey, jobName, slicing })
  *  - slicer.inspectGcode({ objectKey })
  *  - print.queue(printerId, payload)
- *
- * หมายเหตุ:
- * - ไม่เปลี่ยนพฤติกรรมเดิมของ makeApi(); แค่ "ขยาย" ความสามารถ
- * - ถ้า base api มี http.get/post หรือ get/post/request จะพยายามใช้แบบที่มีอยู่
+ *  - storage.deleteById(id, { delete_object_from_s3 })
+ *  - storage.deleteByKey({ object_key, delete_object_from_s3 })
+ *  - storage.hardDelete({ object_key, require_manager? })
  */
 export function useApi() {
   const { token, logout } = useAuth() || {};
@@ -43,6 +42,15 @@ export function useApi() {
       throw new Error("API client missing POST method");
     };
 
+    const doDelete = async (url, opts) => {
+      // รองรับ base.del(), http.delete(), หรือ base.request({ method: "DELETE" })
+      if (typeof base?.del === "function") return base.del(url, opts);
+      if (typeof http?.delete === "function") return http.delete(url, opts);
+      if (typeof base?.request === "function")
+        return base.request({ method: "DELETE", url, ...(opts || {}) });
+      throw new Error("API client missing DELETE method");
+    };
+
     // ---- ส่วนขยายที่ต้องใช้กับฟลโล STL->slice->queue & G-code queue ----
     const extended = {
       // ========== SLICER ==========
@@ -52,7 +60,7 @@ export function useApi() {
          * originExt จะกำหนดเป็น "stl" เสมอในฟลโลนี้
          * Body ที่ BE คาดหวัง:
          *  { fileId, originExt:"stl", jobName, slicing? }
-         * Response ที่คาดหวัง:
+         * Response:
          *  { gcode_key, result:{ time_min, filament_g }, preview_image_url? }
          */
         sliceFromStorage: async ({ objectKey, jobName, slicing }) => {
@@ -67,8 +75,7 @@ export function useApi() {
 
         /**
          * อ่าน meta เวลา/กรัม จากหัวไฟล์ G-code ใน storage
-         * Query: /api/gcode/meta?object_key=...
-         * Response: { time_min, time_text?, filament_g? }
+         * /api/gcode/meta?object_key=...
          */
         inspectGcode: async ({ objectKey }) => {
           return doGet("/api/gcode/meta", { params: { object_key: objectKey } });
@@ -79,18 +86,47 @@ export function useApi() {
       print: {
         /**
          * เข้าคิวพิมพ์ (ให้ BE บันทึก History + Storage และส่งไป OctoPrint เมื่อถึงคิว)
-         * payload ตัวอย่าง:
-         *  {
-         *    name: "CameraMount_V1",
-         *    time_min: 73,           // optional
-         *    source: "slice"|"upload"|"storage",
-         *    thumb: "data:image/png;base64,...", // optional
-         *    gcode_key: "storage/2025/09/xxx.gcode"
-         *  }
          */
         queue: async (printerId, payload) => {
           const q = encodeURIComponent(printerId);
           return doPost(`/api/print?printer_id=${q}`, payload);
+        },
+      },
+
+      // ========== STORAGE (ลบปกติ + ลบให้เกลี้ยง) ==========
+      storage: {
+        /**
+         * ลบด้วย id (ตรงตาราง StorageFile) + ลบ object ใน S3 (default=true)
+         * DELETE /api/storage/id/{fid}?delete_object_from_s3=1
+         */
+        deleteById: async (fid, query = { delete_object_from_s3: true }, opts) => {
+          const qs = new URLSearchParams(
+            Object.entries(query || {}).reduce((acc, [k, v]) => {
+              if (v !== undefined && v !== null) acc[k] = String(v);
+              return acc;
+            }, {})
+          ).toString();
+          const url = `/api/storage/id/${encodeURIComponent(fid)}${qs ? `?${qs}` : ""}`;
+          return doDelete(url, opts);
+        },
+
+        /**
+         * ลบด้วย object_key (ใช้ได้ทั้งกรณีมี/ไม่มี row ใน DB)
+         * DELETE /api/storage/by-key?object_key=...&delete_object_from_s3=1
+         */
+        deleteByKey: async (query = { object_key: "", delete_object_from_s3: true }, opts) => {
+          if (!query?.object_key) throw new Error("object_key is required");
+          return doDelete("/api/storage/by-key", { params: query, ...(opts || {}) });
+        },
+
+        /**
+         * ลบให้เกลี้ยง (ไฟล์หลัก + preview + manifest + row DB ที่เกี่ยวข้อง)
+         * ใช้เมื่อกดกากบาทใน StoragePage
+         * DELETE /api/storage/object-hard?object_key=...&require_manager=0
+         */
+        hardDelete: async (query = { object_key: "", require_manager: false }, opts) => {
+          if (!query?.object_key) throw new Error("object_key is required");
+          return doDelete("/api/storage/object-hard", { params: query, ...(opts || {}) });
         },
       },
     };
@@ -101,6 +137,13 @@ export function useApi() {
       ...extended,
       slicer: { ...(base?.slicer || {}), ...(extended.slicer || {}) },
       print: { ...(base?.print || {}), ...(extended.print || {}) },
+      storage: { ...(base?.storage || {}), ...(extended.storage || {}) },
+
+      // เผื่อ FE บางจุดต้องใช้ API_BASE (เช่นสร้างลิงก์ /api/files/raw)
+      API_BASE: base?.API_BASE || "",
+      get: doGet,
+      post: doPost,
+      del: doDelete,
     };
   }, [token, logout]);
 }

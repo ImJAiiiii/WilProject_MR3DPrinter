@@ -17,7 +17,8 @@ export default function NotificationBell({
   const { token, user } = useAuth() || {};
   const api = useApi();
 
-  const SUPPRESS_STATUSES = new Set(["started"]);
+  // ✅ แสดงทุกสถานะ (ไม่ suppress อะไรเลย)
+  const SUPPRESS_STATUSES = new Set();
 
   // ---------- cache per-user ----------
   const CACHE_KEY = useMemo(
@@ -139,7 +140,8 @@ export default function NotificationBell({
       label = "Print failed"; kind = "error"; status = "failed";
       if (!message) message = msg.failed;
     } else if (is("print.cancelled") || is("print.canceled")) {
-      label = "Print canceled"; kind = "neutral"; status = "canceled";
+      // 🔁 เปลี่ยนจาก neutral → warning เพื่อเข้ากับ schema ('info'|'success'|'warning'|'error')
+      label = "Print canceled"; kind = "warning"; status = "canceled";
       if (!message) message = msg.canceled;
     } else if (is("print.paused")) {
       label = "Paused"; kind = "warning"; status = "paused";
@@ -194,7 +196,7 @@ export default function NotificationBell({
     const now = Date.now();
     const item = { ...normalize(data, namedType), time: now };
 
-    // drop unwanted cards
+    // ไม่มีการตัดสถานะแล้ว
     if (SUPPRESS_STATUSES.has(item.status)) return;
 
     setItems((prev) => {

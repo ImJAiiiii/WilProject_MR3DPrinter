@@ -53,13 +53,31 @@ let __onUnauthorized = null;   // เรียกเมื่อ refresh แล�
 let __doRefreshOnce = null;    // ฟังก์ชันรีเฟรช 1 ครั้ง คืน access ใหม่หรือ null
 
 /** tiny fetch core ที่ลอง refresh 1 ครั้งอัตโนมัติเมื่อเจอ 401 */
-async function requestCore(url, {
-  method = "GET", headers, body, query, token, timeoutMs = 15000, raw = false,
-} = {}) {
+async function requestCore(
+  url,
+  {
+    method = "GET",
+    headers,
+    body,
+    query,
+    token,
+    timeoutMs,                 // ← ให้ผู้เรียก override ได้
+    raw = false,
+  } = {}
+) {
+  // ✅ โปรไฟล์ endpoint ที่มักช้า → ขยาย timeout อัตโนมัติ (เว้นแต่ผู้เรียกกำหนดเอง)
+  const SLOW_ENDPOINTS =
+    /\/api\/storage\b|\/printers\/[^/]+\/queue\b|\/history\/my\b|\/api\/notifications\b/i;
+  const DEFAULT_FAST_TIMEOUT = 15000;  // 15s (เดิม)
+  const DEFAULT_SLOW_TIMEOUT = 45000;  // 45s (สำหรับรายการ/สโตเรจ/คิวที่ช้า)
+  const effectiveTimeout = Number.isFinite(timeoutMs)
+    ? timeoutMs
+    : (SLOW_ENDPOINTS.test(String(url)) ? DEFAULT_SLOW_TIMEOUT : DEFAULT_FAST_TIMEOUT);
+
   async function _doFetch(useToken) {
     const fullUrl = withBase(url) + buildQuery(query);
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(new Error("timeout")), timeoutMs);
+    const t = setTimeout(() => ctl.abort(new Error("timeout")), effectiveTimeout);
     try {
       const h = new Headers(headers || {});
       if (useToken) h.set("Authorization", `Bearer ${useToken}`);
@@ -72,7 +90,12 @@ async function requestCore(url, {
       const toSend = body && !isForm && !isURLS && typeof body !== "string" ? JSON.stringify(body) : body;
 
       const res = await fetch(fullUrl, {
-        method, headers: h, body: toSend, signal: ctl.signal, mode: "cors", credentials: "omit",
+        method,
+        headers: h,
+        body: toSend,
+        signal: ctl.signal,
+        mode: "cors",
+        credentials: "omit",
       });
 
       if (!res.ok) {
@@ -274,8 +297,7 @@ export function AuthProvider({ children }) {
       }
     })();
     return clearTimers;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ----- WebSocket (เฉพาะเมื่อ login ถาวรแล้ว) ----- */
   const wsRef = useRef(null);
@@ -423,8 +445,7 @@ export function AuthProvider({ children }) {
         }
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = useMemo(() => ({
     token: accessToken,                // ชื่อเดิม (บางไฟล์ยังใช้) = access_token

@@ -71,47 +71,6 @@ function toAbs(url) {
   return new URL(rel, baseForURL).toString();
 }
 
-/* ---------- JWT helpers ---------- */
-function b64urlToJson(b64url) {
-  try {
-    const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
-    const json = decodeURIComponent(
-      Array.prototype.map
-        .call(atob(b64), (c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-        .join("")
-    );
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-function getJwtExpMs(token) {
-  try {
-    const [, p] = String(token || "").split(".");
-    const payload = p ? b64urlToJson(p) : null;
-    return payload?.exp ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
-function isExpiredToken(token, { skewSec = 60, marginSec = 15 } = {}) {
-  const expMs = getJwtExpMs(token);
-  if (!expMs) return true;
-  return Date.now() >= expMs - (skewSec + marginSec) * 1000;
-}
-
-/* ---------- token storage ---------- */
-const getStoredToken = () => {
-  try {
-    const tk =
-      localStorage.getItem("auth.token") || // ใหม่
-      localStorage.getItem("token") || ""; // legacy
-    return tk || "";
-  } catch {
-    return "";
-  }
-};
-
 /* ---------------- helper URLs สำหรับรูป/พรีวิว ---------------- */
 /** แปลง S3 object key -> URL เสิร์ฟไฟล์ผ่าน BE (รองรับ token ผ่าน query) */
 export function objectKeyToUrl(keyOrUrl, token) {
@@ -155,21 +114,7 @@ export function legacyCatalogUrl(pathLike, token) {
   return u.toString();
 }
 
-/* ---------- headers & error helpers ---------- */
-const toHeaders = (headers = {}, { body, auth = true, raw = false, token } = {}) => {
-  const h = new Headers(headers);
-  const tok = token || getStoredToken();
-  if (auth && tok) h.set("Authorization", `Bearer ${tok}`);
-
-  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-  const isURLSP = typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams;
-  if (body && !isForm && !isURLSP && !raw && !h.has("Content-Type")) {
-    h.set("Content-Type", "application/json");
-  }
-  if (!h.has("Accept")) h.set("Accept", "application/json, text/plain;q=0.9, */*;q=0.1");
-  return h;
-};
-
+/* ---------- error helpers ---------- */
 async function parseErrorResponse(res, fallback = "") {
   let msg = fallback;
   let parsed;
@@ -240,10 +185,13 @@ function defaultRetriesForMethod(method) {
   return 0;
 }
 
-/* ---------------- API factory (stateless) ---------------- */
-export function makeApi({ token, onUnauthorized } = {}) {
-  let unauthorizedNotifiedAt = 0;
-  const nextOctoRetryAt = new Map(); // printer_id -> epoch ms
+/* ---------------- API factory ----------------
+   เปลี่ยนมา “พึ่งพา” AuthContext.requestCore เสมอ (auto-refresh)
+------------------------------------------------ */
+export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
+  if (typeof requestCoreFn !== "function") {
+    throw new Error("[api] makeApi requires requestCoreFn (from AuthContext)");
+  }
 
   async function request(
     url,
@@ -269,36 +217,16 @@ export function makeApi({ token, onUnauthorized } = {}) {
   ) {
     const doRequest = async () => {
       const q = { ...(query || {}) };
-      const stored = token || getStoredToken();
+      const useToken = token || "";
 
-      // เพิ่ม token เป็น query (เช่น SSE)
-      if (authQuery && stored) q.token = stored;
+      if (authQuery && useToken) q.token = useToken;
 
-      // ถ้า token หมดอายุ แจ้งเตือน & โยน 401
-      if (auth && stored && isExpiredToken(stored)) {
-        const now = Date.now();
-        if (now - unauthorizedNotifiedAt > 1500) {
-          unauthorizedNotifiedAt = now;
-          try {
-            onUnauthorized?.();
-          } catch {}
-        }
-        const err = new Error("Session expired. Please log in again.");
-        err.status = 401;
-        throw err;
-      }
-
-      // รวม URL + query อย่างปลอดภัย
       const fullUrl = buildUrl(url, q);
-
       const _timeout = numberIsFinite(timeoutMs)
         ? timeoutMs
         : numberIsFinite(timeout)
         ? timeout
         : 30000; // default 30s
-
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort("timeout"), _timeout);
 
       try {
         const isForm = typeof FormData !== "undefined" && body instanceof FormData;
@@ -306,60 +234,25 @@ export function makeApi({ token, onUnauthorized } = {}) {
         const bodyToSend =
           body && !isForm && !isURLSP && typeof body !== "string" ? JSON.stringify(body) : body;
 
-        const res = await fetch(fullUrl, {
+        const res = await requestCoreFn(fullUrl, {
           method,
-          headers: toHeaders(headers, { body, auth, raw, token: stored }),
+          headers,
           body: bodyToSend,
-          signal: ctl.signal,
-          mode, // "cors" สำหรับข้ามโดเมน, หรือ "same-origin" หาก proxy
-          credentials: credentials ?? "omit",
+          token: auth ? useToken : undefined,
+          timeoutMs: _timeout,
+          raw,
         });
 
-        if (res.status === 401) {
-          const now = Date.now();
-          if (now - unauthorizedNotifiedAt > 1500) {
-            unauthorizedNotifiedAt = now;
-            try {
-              onUnauthorized?.();
-            } catch {}
-          }
+        if (!raw) {
+          if (expect === "blob") return res; // เมื่อ raw=true ใน requestCoreFn จะคืน Response
+          if (expect === "text") return res;
         }
-        if (!res.ok) {
-          throw await parseErrorResponse(res, res.status === 401 ? "Unauthorized" : "");
-        }
-
-        if (raw) return res;
-        if (res.status === 204) return null;
-
-        const ct = res.headers.get("content-type") || "";
-        if (expect === "blob") return res.blob();
-        if (expect === "text") return res.text();
-        if (expect === "json") return res.json();
-        if (ct.includes("application/json")) return res.json();
-        if (ct.startsWith("text/")) return res.text();
-
-        const txt = await res.text();
-        try {
-          return JSON.parse(txt);
-        } catch {
-          return txt;
-        }
+        return res;
       } catch (e) {
-        if (e === "timeout" || e?.name === "AbortError" || e?.message === "timeout") {
-          const err = new Error("Request timeout");
-          err.status = 0;
-          err.cause = "timeout";
-          throw err;
-        }
-        if (e instanceof TypeError && !("status" in e)) {
-          const err = new Error("Network error (failed to connect)");
-          err.cause = e;
-          err.status = 0;
-          throw err;
+        if (e?.response instanceof Response) {
+          throw await parseErrorResponse(e.response);
         }
         throw e;
-      } finally {
-        clearTimeout(timer);
       }
     };
 
@@ -400,8 +293,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
       method: "POST",
       body: formData,
       ...(opts || {}),
-      // อัปโหลดฟอร์ม: อย่าใส่ Content-Type เอง ให้ browser จัดการ boundary
-      headers: { ...(opts?.headers || {}) },
+      headers: { ...(opts?.headers || {}) }, // อย่าเซ็ต Content-Type เอง (ให้ browser ใส่ boundary)
     });
 
   // อัปโหลดไป Presigned URL (S3/MinIO) — ไม่ใส่ auth/credentials
@@ -414,7 +306,6 @@ export function makeApi({ token, onUnauthorized } = {}) {
       raw: true,
       auth: false,
       credentials: "omit",
-      // ปกติไม่ retry PUT presigned อัตโนมัติ (กันเสี่ยงซ้ำ)
       retries: numberIsFinite(opts.retries) ? opts.retries : 0,
       mode: "cors",
     });
@@ -451,7 +342,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
         (typeof window !== "undefined" ? window.location.origin : "http://localhost");
       const u = new URL("/files/raw", base);
       u.searchParams.set("object_key", object_key);
-      const tok = tkn || token || getStoredToken();
+      const tok = tkn || token || "";
       if (tok) u.searchParams.set("token", tok);
       u.searchParams.set("t", Date.now().toString());
       return u.toString();
@@ -462,7 +353,6 @@ export function makeApi({ token, onUnauthorized } = {}) {
     // === เปลี่ยนเส้นทางทั้งหมดเป็น /api/storage/... ===
     requestUpload: (arg1, content_type, size, opts) => {
       const body = typeof arg1 === "object" ? arg1 : { filename: arg1, content_type, size };
-      // ขอ presign มักใช้เวลา: ขยาย timeout + retry
       return post("/api/storage/upload/request", body, undefined, {
         timeout: 45000,
         retries: 2,
@@ -633,7 +523,8 @@ export function makeApi({ token, onUnauthorized } = {}) {
 
     async octoprintJobSafe(printer_id, opts) {
       const now = Date.now();
-      const nextAt = nextOctoRetryAt.get(printer_id) || 0;
+      const nextOctoRetryMap = (printer._nextOctoRetryAt ||= new Map());
+      const nextAt = nextOctoRetryMap.get(printer_id) || 0;
       if (now < nextAt) return null;
       try {
         return await request(`/printers/${encodeURIComponent(printer_id)}/octoprint/job`, {
@@ -647,7 +538,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
         });
       } catch (e) {
         if ([502, 503, 504].includes(Number(e?.status))) {
-          nextOctoRetryAt.set(printer_id, now + 60_000);
+          nextOctoRetryMap.set(printer_id, now + 60_000);
         }
         throw e;
       }
@@ -696,7 +587,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
       }),
   };
 
-  /* -------- Notifications API (เพิ่มใหม่) -------- */
+  /* -------- Notifications API -------- */
   const notifications = {
     list: (query, opts) =>
       get("/api/notifications", query, {
@@ -721,7 +612,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
   // SSE / WS
   function sse(path, { query, withToken = true } = {}) {
     const q = { ...(query || {}) };
-    const tok = token || getStoredToken();
+    const tok = token || "";
     if (withToken && tok) q.token = tok;
     const url = buildUrl(path, q);
     return new EventSource(url);
@@ -764,7 +655,7 @@ export function makeApi({ token, onUnauthorized } = {}) {
         ""
       ) + "/";
     const u = new URL(path, httpBase);
-    const tok = token || getStoredToken();
+    const tok = token || "";
     if (tok) u.searchParams.set("token", tok);
     const proto = u.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${u.host}${u.pathname}${u.search}`;
@@ -781,28 +672,31 @@ export function makeApi({ token, onUnauthorized } = {}) {
     download,
     upload,
     uploadPresigned,
-    files,        // <— มี rawUrl() แล้ว
+    files,
     storage,
     slicer,
     queue,
     printer,
     history,
-    notifications, // <— เพิ่มใหม่
+    notifications,
     sse,
     sseWithBackoff,
     wsUrl,
   };
 }
 
-/* ---------------- React hook wrapper (stateful) ---------------- */
+/* ---------------- React hook wrapper (stateful) ----------------
+   ส่ง requestCore (จาก AuthContext) เข้าไปให้ makeApi
+----------------------------------------------------------------- */
 export function useApi() {
-  const { token, logout } = useAuth() || {};
+  const { token, logout, requestCore } = useAuth() || {};
   return useMemo(
     () =>
       makeApi({
         token,
         onUnauthorized: () => logout?.({ silent: true }),
+        requestCoreFn: requestCore, // สำคัญ: ให้ request วิ่งผ่านตัวที่ auto-refresh
       }),
-    [token, logout]
+    [token, logout, requestCore]
   );
 }
