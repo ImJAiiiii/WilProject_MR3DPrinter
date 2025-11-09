@@ -5,6 +5,8 @@ import UserPrintHistoryModal from "../UserPrintHistoryModal";
 import { useApi } from "../api";
 import { useAuth } from "../auth/AuthContext";
 
+const NO_IMAGE_URL = "/icon/noimage.png";
+
 export default function PrintingPage({
   jobs = [],
   currentUserId,
@@ -189,6 +191,9 @@ export default function PrintingPage({
 
   // ❌ ลบ placeholder/fallback เดิม → ✅ ใช้รูปเดียว
   const onImgError = (e) => {
+    // กันลูปกรณี noimage.png พังด้วย
+    if (e.currentTarget.dataset.fallback === "1") return;
+    e.currentTarget.dataset.fallback = "1";
     e.currentTarget.onerror = null;
     e.currentTarget.src = NO_IMAGE_URL;
   };
@@ -533,7 +538,7 @@ export default function PrintingPage({
                   {isMine && <span className="own-bar" aria-hidden />}
                   <div className="part-cell">
                     <img
-                      src={imgSrc}
+                      src={imgSrc || NO_IMAGE_URL}
                       alt="part"
                       className="part-img"
                       onError={onImgError}

@@ -172,11 +172,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
       thumbUrl = raw.preview_url;
     } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      if (raw.preview_url.startsWith("/images/")) {
-        thumbUrl = raw.preview_url;
-      } else {
-        thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
-      }
+      thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
     }
 
     if (!thumbUrl) {
@@ -198,6 +194,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         thumbAlt = alt || "";
       }
     }
+
 
     const up = raw?.uploader || null;
     let uploaderName = (up?.name || up?.employee_id || "") || null;
