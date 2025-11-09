@@ -71,7 +71,8 @@ class UpdateMeIn(BaseModel):
 class NotificationOut(BaseModel):
     id: int
     type: str = Field(alias="ntype")
-    severity: Literal["info", "success", "warning", "error"] = "info"
+    # ✅ ขยาย literal ให้รองรับ "neutral" ตาม canonical event
+    severity: Literal["info", "success", "warning", "error", "neutral"] = "info"
     title: str
     message: Optional[str] = None
     # BE เก็บเป็น TEXT (JSON string) — แปลงเป็น dict ให้ FE ใช้สะดวก
@@ -95,7 +96,8 @@ class NotificationOut(BaseModel):
 
 class NotificationCreate(BaseModel):
     type: str
-    severity: Literal["info", "success", "warning", "error"] = "info"
+    # ✅ ให้สอดคล้องกับด้านบน
+    severity: Literal["info", "success", "warning", "error", "neutral"] = "info"
     title: str
     message: Optional[str] = None
     data: Optional[dict] = None
@@ -198,6 +200,10 @@ class PrintJobOut(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     octoprint_job_id: Optional[str] = None
+
+    # ✅ เพิ่มเพื่อให้ตรงกับข้อมูลจริงจาก DB / print_queue
+    gcode_path: Optional[str] = None
+    storage_file_id: Optional[int] = None
 
     # ฟิลด์ใหม่ (decode อัตโนมัติถ้ามาจาก JSON string)
     template: Optional[PrintJobTemplate] = None

@@ -272,14 +272,39 @@ async def _call_notify_job_event_async(db: Session, ev: dict):
         return await _run_payload()
 
 def _emit_event_all_channels(db: Session, employee_id: str, ev: dict):
+    """
+    Policy:
+      - notify_user  : สำหรับ in-app/SSE/สถานี/Unity/Holo (ทุก event)
+      - notify_job_event (Teams DM): เฉพาะ event สำคัญของงานพิมพ์เท่านั้น
+        (เริ่ม, เสร็จ, ล้มเหลว, ยกเลิก, หยุดชั่วคราว) ไม่ DM เมื่อเป็น 'issue' หรือ 'queued'
+      - ปรับได้ผ่าน ENV: NOTIFY_DM_TYPES (คอมม่าเซพ)
+    """
     try:
         _bgcall(_call_notify_user_async, db, employee_id, ev)
     except Exception:
         logger.exception("notify_user spawn failed")
-    try:
-        _bgcall(_call_notify_job_event_async, db, ev)
-    except Exception:
-        logger.exception("notify_job_event spawn failed")
+
+    ev_type = str(ev.get("type") or "").lower().strip()
+    default_dm_types = {
+        "print.started",
+        "print.completed",
+        "print.failed",
+        "print.canceled",
+        "print.paused",
+    }
+    _dm_env = (os.getenv("NOTIFY_DM_TYPES") or "").strip()
+    if _dm_env:
+        dm_types = {t.strip().lower() for t in _dm_env.split(",") if t.strip()}
+    else:
+        dm_types = default_dm_types
+
+    if ev_type in dm_types:
+        try:
+            _bgcall(_call_notify_job_event_async, db, ev)
+        except Exception:
+            logger.exception("notify_job_event spawn failed")
+    else:
+        logger.info("skip DM for event type=%s (policy)", ev_type)
 
 # =============================================================================
 
@@ -305,8 +330,8 @@ AUTO_START_ON_ENQUEUE    = _env_bool("AUTO_START_ON_ENQUEUE", True)
 RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
 ALLOW_ADMIN_HEADER       = _env_bool("ALLOW_ADMIN_HEADER", True)
 
-# === NEW: Bed-empty gating toggles ===========================================
-REQUIRE_BED_EMPTY = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
+# === Bed-empty gating toggles (canonical names) ==============================
+REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
 BED_EMPTY_MAX_AGE_SEC = int(os.getenv("BED_EMPTY_MAX_AGE_SEC") or "300")
 
 AUTO_PREVIEW_ON_ENQUEUE = _env_bool("AUTO_PREVIEW_ON_ENQUEUE", True)
@@ -338,15 +363,16 @@ except Exception:
 
 ALLOWED_SOURCE = {"upload", "history", "storage"}
 
-# ==== Bed-empty gate ====
+# ==== Bed-empty gate helper ====
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name) or default)
     except Exception:
         return int(default)
 
-REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
-BED_EMPTY_MAX_AGE_SEC = _env_int("BED_EMPTY_MAX_AGE_SEC", 300)
+def _octo_configured() -> bool:
+    """มี config ครบสำหรับคุยกับ OctoPrint ไหม"""
+    return bool(OCTO_BASE and OCTO_KEY)
 
 async def _bed_empty_recent_async(printer_id: str) -> bool:
     """
@@ -375,7 +401,7 @@ async def _bed_empty_recent_async(printer_id: str) -> bool:
     except Exception:
         logger.exception("[QUEUE] bed-status check failed")
         return False
-    
+
 def status_order_expr():
     return case(
         (PrintJob.status.in_(("processing", "printing")), 0),
@@ -442,9 +468,12 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
     except Exception:
         payload = {k: getattr(job, k, None) for k in [
             "id","printer_id","employee_id","name","thumb","time_min","status",
-            "uploaded_at","started_at","finished_at","octoprint_job_id"
+            "uploaded_at","started_at","finished_at","octoprint_job_id","gcode_path"
         ]}
         payload["source"] = j_source
+        # ถ้า schema มี storage_file_id ก็จะได้ไปเองเมื่อ from_attributes ใช้งานได้
+        if hasattr(job, "storage_file_id"):
+            payload["storage_file_id"] = getattr(job, "storage_file_id", None)
         o = PrintJobOut.model_validate(payload)
     ok, _ = _can_cancel_with_reason(current_user, job)
     if hasattr(o, "me_can_cancel"):
@@ -641,6 +670,26 @@ def _finalize_object_if_staging(
         return out.object_key
     return src_key
 
+# ---- NEW: หา storage_file_id สำหรับ gcode_key หลัง finalize/ensure-record แล้ว ----
+def _find_storage_file_id(db: Session, employee_id: str, gcode_key: Optional[str]) -> Optional[int]:
+    if not gcode_key:
+        return None
+    row = (
+        db.query(StorageFile.id)
+        .filter(StorageFile.object_key == gcode_key)
+        .first()
+    )
+    if row and row[0]:
+        return int(row[0])
+    # บางกรณีผู้ใช้ถูก resolve ใหม่เป็น owner_emp แล้ว ensure_record ใช้ emp นั้น:
+    row2 = (
+        db.query(StorageFile.id)
+        .filter(StorageFile.employee_id == _emp(employee_id),
+                StorageFile.object_key == gcode_key)
+        .first()
+    )
+    return int(row2[0]) if row2 and row2[0] else None
+
 # --------------------------- preview helpers ---------------------------------
 def _preview_key_for(gcode_key: Optional[str]) -> Optional[str]:
     if not gcode_key:
@@ -681,7 +730,7 @@ def _auto_render_preview(gcode_key: str) -> Optional[str]:
                 return preview_key
     except Exception:
         logger.exception("auto-render preview failed for %s", gcode_key)
-        return None
+    return None
 
 def ensure_preview_once(gcode_key: str) -> Optional[str]:
     preview_key = _preview_key_for(gcode_key)
@@ -815,9 +864,9 @@ async def _download_bytes(src: str) -> bytes:
         raise RuntimeError(f"unsupported_source:{src}")
 
 def _octo_is_ready() -> bool:
-    if not (OCTO_BASE and OCTO_KEY):
-        # ไม่มี config → ถือว่า “พร้อม” เพื่อให้ flow dev ไปต่อได้
-        return True
+    # ถ้าไม่มี config ให้ถือว่า "ยังไม่พร้อม" เพื่อกันการ start งานโดยไม่ตั้งใจ
+    if not _octo_configured():
+        return False
     url = f"{OCTO_BASE}/api/printer"
     try:
         with httpx.Client(timeout=5.0, follow_redirects=True) as c:
@@ -832,8 +881,18 @@ def _octo_is_ready() -> bool:
         return False
 
 async def _dispatch_to_octoprint(db: Session, job: PrintJob, tasks: Optional[BackgroundTasks] = None) -> None:
-    if not (OCTO_BASE and OCTO_KEY):
-        logger.warning("OctoPrint not configured (base/key missing), skip dispatch")
+    if not _octo_configured():
+        # ย้อนสถานะกลับเป็น queued แล้วแจ้งเตือนแบบ issue (ไม่ให้ล้มเป็น failed)
+        logger.warning("OctoPrint not configured; keep job queued")
+        job.status = "queued"
+        db.add(job); db.commit(); db.refresh(job)
+        ev = _format_event(
+            type="print.issue",
+            printer_id=job.printer_id,
+            data={"name": job.name, "job_id": int(job.id), "reason": "octoprint_not_configured"},
+        )
+        # จะไปเฉพาะ in-app/SSE; DM ถูก policy บล็อกอยู่แล้ว
+        _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, ev)
         return
 
     src = (getattr(job, "gcode_path", "") or getattr(job, "gcode_key", "") or "").strip()
@@ -846,11 +905,11 @@ async def _dispatch_to_octoprint(db: Session, job: PrintJob, tasks: Optional[Bac
         file_bytes = await _download_bytes(src)
     except Exception:
         logger.exception("Download gcode failed for job %s", job.id)
-        job.status = "failed"
-        job.finished_at = datetime.utcnow()
+        # คงคิวไว้ ไม่ mark failed
+        job.status = "queued"
         db.add(job); db.commit(); db.refresh(job)
         evf = _format_event(
-            type="print.failed",
+            type="print.issue",
             printer_id=job.printer_id,
             data={"name": job.name, "job_id": int(job.id), "reason": "download_failed"},
         )
@@ -899,11 +958,11 @@ async def _dispatch_to_octoprint(db: Session, job: PrintJob, tasks: Optional[Bac
 
     if last_err:
         logger.error("OctoPrint push failed after retries for job %s", job.id)
-        job.status = "failed"
-        job.finished_at = datetime.utcnow()
+        # คงคิวไว้ ไม่ mark failed
+        job.status = "queued"
         db.add(job); db.commit(); db.refresh(job)
         evf = _format_event(
-            type="print.failed",
+            type="print.issue",
             printer_id=job.printer_id,
             data={"name": job.name, "job_id": int(job.id), "reason": "octoprint_unreachable"},
         )
@@ -980,10 +1039,10 @@ def _bed_empty_recent_sync(printer_id: str) -> bool:
     """
     ดึงสถานะเตียงล่าสุดจาก notifications service
     ยอมให้ผ่านเมื่อ:
-      - ปิด REQUIRE_BED_EMPTY หรือ
+      - ปิด REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT หรือ
       - age_sec <= BED_EMPTY_MAX_AGE_SEC
     """
-    if not REQUIRE_BED_EMPTY:
+    if not REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
         return True
     if not ADMIN_TOKEN:
         logger.warning("[QUEUE] bed-gate: ADMIN_TOKEN missing -> block")
@@ -1028,14 +1087,19 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
     if not next_job:
         return None
 
-    # === NEW: bed-empty gate ===
+    # === bed-empty gate ===
     if REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
         ok = _bed_empty_recent_sync(printer_id)
         if not ok:
             logger.info("[QUEUE] block start: bed not confirmed empty (printer=%s, job#%s)", printer_id, next_job.id)
             return None
 
-    # ผ่าน gate → เริ่มงาน
+    # ถ้า OctoPrint ยังไม่ถูกตั้งค่า → อย่าเปลี่ยนเป็น processing (คงเป็น queued ไว้)
+    if not _octo_configured():
+        logger.info("[QUEUE] skip start: OctoPrint not configured (printer=%s, job#%s)", printer_id, next_job.id)
+        return None
+
+    # ผ่าน gate → เริ่มงาน (มี OctoPrint พร้อม)
     now = datetime.utcnow()
     next_job.status = "processing"
     if not next_job.started_at:
@@ -1089,16 +1153,18 @@ def _enqueue_job(
     gcode_src_in = gcode_path_in or gcode_key_in
     same_key = bool(original_key_in and gcode_src_in and original_key_in == gcode_src_in)
 
+    # finalize ต้นฉบับถ้าต่าง key (เช่น STL → slice → GCODE)
     if original_key_in and not same_key:
         _ = _finalize_object_if_staging(
             db, _emp(current.employee_id),
             original_key_in,
             display_name=name or original_key_in,
-            want_record=False,
+            want_record=False,  # แค่ ensure ต้นน้ำ ไม่บังคับต้องสร้าง record
             model_for_catalog=model_for_catalog,
             user=current,
         )
 
+    # finalize ไฟล์ที่จะพิมพ์จริง และ ensure storage record
     gcode_final = None
     if gcode_src_in:
         gcode_final = _finalize_object_if_staging(
@@ -1110,8 +1176,10 @@ def _enqueue_job(
             user=current,
         )
 
+    # commit เพื่อให้ ensure_storage_record เขียน id ได้ (เดี๋ยวจะ lookup id)
     db.commit()
 
+    # preview
     gk = (gcode_final or gcode_path_in or gcode_key_in)
     pkey = _preview_key_for(gk) if gk else None
     job_thumb = payload.thumb or pkey
@@ -1124,6 +1192,7 @@ def _enqueue_job(
                 logger.exception("background preview render failed for %s", gk)
         _submit_bg(tasks, _bg_render)
 
+    # owner อาจถูก resolve จาก StorageFile (ถ้ามี) เพื่อผูกกับผู้ "อัปโหลด" ที่แท้จริง
     owner_emp = _resolve_owner_by_gkey(db, gk, _emp(current.employee_id))
     requester_emp = _emp(current.employee_id)
 
@@ -1142,6 +1211,11 @@ def _enqueue_job(
             printer_id, owner_emp, gk, dup.id)
         return _to_out(db, current, dup)
 
+    # ---- NEW: คำนวณ storage_file_id ถ้ามี ----
+    storage_file_id: Optional[int] = None
+    if hasattr(PrintJob, "storage_file_id"):
+        storage_file_id = _find_storage_file_id(db, owner_emp, gk)
+
     job_kwargs = dict(
         printer_id=printer_id,
         employee_id=owner_emp,
@@ -1155,9 +1229,12 @@ def _enqueue_job(
     )
     if hasattr(PrintJob, "requested_by_employee_id"):
         job_kwargs["requested_by_employee_id"] = requester_emp
+    if hasattr(PrintJob, "storage_file_id"):
+        job_kwargs["storage_file_id"] = storage_file_id
 
     job = PrintJob(**job_kwargs)
 
+    # ฝัง template/stats/file ถ้ามี (ไม่บังคับ)
     try:
         if hasattr(job, "template_json") and getattr(payload, "template", None) is not None:
             job.template_json = json.dumps(payload.template, ensure_ascii=False)
@@ -1531,6 +1608,7 @@ def internal_process_next(
     db: Session = Depends(get_db),
     x_admin_token: str = Header(default=""),
     x_reason: str = Header(default=""),
+    request: Request = None,   # <<< ใช้งานอ่าน X-Reason ได้จริง
 ):
     _check_admin_token(x_admin_token)
     pid = _norm_printer_id(printer_id)

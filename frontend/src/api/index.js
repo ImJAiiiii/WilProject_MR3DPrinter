@@ -354,20 +354,20 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
     requestUpload: (arg1, content_type, size, opts) => {
       const body = typeof arg1 === "object" ? arg1 : { filename: arg1, content_type, size };
       return post("/api/storage/upload/request", body, undefined, {
-        timeout: 45000,
+        timeout: 60000,   // was 45s → 60s เผื่อ OneDrive / I/O หน่วง
         retries: 2,
         ...(opts || {}),
       });
     },
     completeUpload: (payload, opts) =>
       post("/api/storage/upload/complete", payload, undefined, {
-        timeout: 45000,
+        timeout: 60000,   // was 45s → 60s
         retries: 1,
         ...(opts || {}),
       }),
     finalize: (payload, opts) =>
       post("/api/storage/finalize", payload, undefined, {
-        timeout: 45000,
+        timeout: 90000,   // was 45s → 90s (ย้ายไฟล์ +เขียน DB+S3)
         retries: 1,
         ...(opts || {}),
       }),
@@ -425,7 +425,7 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
     // --- regenerate preview PNG บน BE (การันตีสร้างใหม่) ---
     regeneratePreview(gcodeKey, opts) {
       return post("/api/storage/preview/regenerate", null, { object_key: gcodeKey }, {
-        timeout: 45000,
+        timeout: 90000,   // เผื่อเรนเดอร์ใหม่
         retries: 1,
         ...(opts || {}),
       });
@@ -433,10 +433,11 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
   };
 
   const slicer = {
+    // งานหนัก: สไลซ์ + เรนเดอร์พรีวิว → ขยาย timeout เป็น 4 นาที
     preview: (payload, opts) =>
       post("/api/slicer/preview", payload, undefined, {
-        timeout: 60000,
-        retries: 0, // งานหนัก ไม่ควร retry อัตโนมัติ
+        timeout: 240000,  // ← was 60s → 240s เพื่อไม่ให้ตัดกลางงาน
+        retries: 0,
         ...(opts || {}),
       }),
     thumbnail: (object_key, opts) => get("/api/slicer/thumbnail", { object_key }, opts),
@@ -451,7 +452,7 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
       ),
     create: (payload, printer_id, opts) =>
       post("/api/print", payload, printer_id ? { printer_id } : undefined, {
-        timeout: 45000,
+        timeout: 90000,  // was 45s → 90s (บางทีต้องย้ายไฟล์/ตรวจ manifest)
         retries: 0,
         ...(opts || {}),
       }),
@@ -490,6 +491,10 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
         expect: "blob",
         timeout: 10000,
         retries: 1,
+        // เฉพาะ snapshot ใช้ backoff เมื่อเจอ 502/503/504
+        backoffMs: 600,
+        maxBackoffMs: 4000,
+        retryOn: [502, 503, 504],
       }),
 
     pause: (printer_id, opts) =>

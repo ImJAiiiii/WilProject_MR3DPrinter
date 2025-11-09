@@ -268,7 +268,7 @@ def _normalize_severity_for_out(s: Optional[str]) -> str:
         return ss
     if ss == "critical":
         return "error"
-    # รวมทุกค่าแปลก ๆ เช่น "neutral", "", None → "info" (หรือจะเลือก "warning" ก็ได้)
+    # รวมทุกค่าแปลก ๆ เช่น "neutral", "", None → "info"
     return "info"
 
 # =============================================================================
@@ -365,7 +365,8 @@ def _json(data: dict) -> str:
         return json.dumps({"bad_payload":"<unserializable>"}, ensure_ascii=False)
 
 def _emp(x: Optional[str]) -> str:
-    return str(x or "").trim()
+    # ✅ FIX: Python ไม่มี .trim() → ใช้ .strip() แทน
+    return str(x or "").strip()
 
 def _to_out(n: Notification, read_at: Optional[datetime]) -> NotificationOut:
     # ✅ ป้องกันข้อมูลเก่าใน DB ที่มี severity แปลก ๆ (เช่น "neutral") ทำให้ Pydantic ล้ม
@@ -801,7 +802,7 @@ async def notify_job_event(
             "processing": "Your job is starting",
             "completed": "Print completed",
             "failed": "Print failed",
-            "canceled": "Print canceled",  # แก้ข้อความให้ถูกต้อง
+            "canceled": "Print canceled",
             "paused": "Print paused",
         }
         title = title_map.get(status, f"Print status: {status or '-'}")

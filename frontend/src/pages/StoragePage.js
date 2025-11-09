@@ -325,6 +325,17 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     );
   }, [q, dq, merged]);
 
+  /* ---------- show only G-code ---------- */
+  const gcodeFiles = useMemo(() => {
+    const isCtGcode = (ct = "") =>
+      /(?:^|\/)(?:text|application)\/x?-?gcode$/i.test(String(ct).trim());
+    return (files || []).filter((f) => {
+      if (f?.isGcode) return true;                           // จากนามสกุล
+      const ct = f?._raw?.content_type || f?._raw?.contentType || "";
+      return isCtGcode(ct);                                   // กันพลาดโดยดู content_type
+    });
+  }, [files]);
+
   /* ---------- permissions ---------- */
   const isManager = !!(user?.is_manager || user?.can_manage_queue || (user?.role || "").toLowerCase() === "manager");
   const isOwner = useCallback((f) => {
@@ -471,7 +482,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
 
         <div className="file-count" aria-live="polite" style={{ paddingTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-          {loading ? "…" : `${files.length} item${files.length === 1 ? "" : "s"}`}
+          {loading ? "…" : `${gcodeFiles.length} item${gcodeFiles.length === 1 ? "" : "s"}`}
           <button
             type="button"
             className="btn-refresh"
@@ -487,7 +498,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
 
       {!!err && <div className="storage-error" role="alert">{err}</div>}
 
-      {(!loading && files.length === 0) ? (
+      {(!loading && gcodeFiles.length === 0) ? (
         <div style={{ textAlign: "center", color: "#667", padding: "48px 12px" }}>
           <img
             src={process.env.PUBLIC_URL + "/icon/file.png"}
@@ -502,7 +513,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
       ) : (
         <div className="file-grid" aria-busy={loading ? "true" : "false"}>
-          {files.map((f) => {
+          {gcodeFiles.map((f) => {
             const delDisabled = deletingKey && (deletingKey === (f.object_key || f.id || f.name));
             return (
               <div key={`${f.object_key || f.id || f.name}`} className="file-card-wrap">

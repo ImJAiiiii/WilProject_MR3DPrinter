@@ -219,9 +219,17 @@ class PrintJob(Base):
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
 
-    # ฟิลด์ต่อ OctoPrint / ไฟล์
+    # ฟิลด์ต่อ OctoPrint / ไฟล์ (เดิม)
     octoprint_job_id = Column(String, nullable=True)  # ไอดีงานใน OctoPrint (ถ้ามี)
     gcode_path = Column(String, nullable=True)        # ที่อยู่ไฟล์บน storage (ถ้ามี)
+
+    # ✅ ใหม่: FK ไปยัง StorageFile.id เพื่อทำ ON DELETE CASCADE
+    storage_file_id = Column(
+        Integer,
+        ForeignKey("storage_files.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     # ===== Legacy switch: ถ้าไม่ใช้คอลัมน์ใหม่ ให้เป็นค่าคงที่ None =====
     if LEGACY_DB:
@@ -252,7 +260,14 @@ class PrintJob(Base):
         lazy="noload",
     )
 
-    # ------ storage_ref: ปิด relationship เมื่อ LEGACY_DB เป็น True ------
+    # ✅ ความสัมพันธ์กับ StorageFile (ใช้ FK storage_file_id)
+    storage_file = relationship(
+        "StorageFile",
+        back_populates="print_jobs",
+        passive_deletes=True,
+    )
+
+    # ------ storage_ref (อิง gcode_key→object_key) คงไว้เพื่อเข้ากันได้ย้อนหลัง ------
     if LEGACY_DB:
         @property
         def storage_ref(self):
@@ -339,6 +354,13 @@ class StorageFile(Base):
         primaryjoin="foreign(StorageFile.employee_id)==User.employee_id",
         viewonly=True,
         lazy="noload",
+    )
+
+    # ✅ ความสัมพันธ์ย้อนกลับไปงานพิมพ์ (ให้ DB ทำงานลบด้วย ON DELETE CASCADE)
+    print_jobs = relationship(
+        "PrintJob",
+        back_populates="storage_file",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:

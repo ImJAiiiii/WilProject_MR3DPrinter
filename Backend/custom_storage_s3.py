@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from db import get_db
 from auth import get_current_user, get_confirmed_user, get_manager_user
-from models import StorageFile, User, PrintJob  # 🔁 เพิ่ม PrintJob
+from models import StorageFile, User, PrintJob  # 🔁 ใช้งานลบ history/เช็คงาน active
 
 # ===== SCHEMAS: optional import, with local fallbacks =====
 try:
@@ -96,7 +96,7 @@ from s3util import (
 # ---------- preview renderer (optional) ----------
 _HAS_RENDERER = True
 try:
-    from preview_gcode_image import gcode_to_preview_png  # must exist in project
+    from preview_gcode_image import gcode_to_preview_png  # optional but preferred
 except Exception:
     gcode_to_preview_png = None  # type: ignore
     _HAS_RENDERER = False
@@ -983,14 +983,14 @@ def presign_download(object_key: str=Query(...), with_meta: bool=Query(False), _
     key=_validate_key(object_key)
     try: url=presign_get(key)
     except Exception as e: raise HTTPException(500,f"Failed to generate presigned url: {e}")
-    if not with_meta: return {"url":url}
+    if not with_meta: return {"object_key": key, "url":url}
     meta={}
     try:
         h=head_object(key)
         meta={"content_type":h.get("ContentType"), "size":int(h.get("ContentLength",0) or 0),
               "etag":h.get("ETag"), "last_modified":h.get("LastModified").isoformat() if h.get("LastModified") else None}
     except Exception: pass
-    return {"url":url, "meta":meta}
+    return {"object_key": key, "url":url, "meta":meta}
 
 @router.get("/head")
 def head(object_key: str=Query(...), _me: User=Depends(get_current_user)):
@@ -1054,9 +1054,20 @@ def search_names(q: str=Query("", description="keyword (case-insensitive)"), lim
                  db: Session=Depends(get_db), _me: User=Depends(get_current_user)):
     qq=(q or "").strip().lower()
     if not qq: return StorageSearchNamesOut(items=[])
-    rows=(db.query(StorageFile.name).filter(func.lower(StorageFile.name).like(f"%{qq}%"))
-          .order_by(StorageFile.name.asc()).limit(limit).all())
-    return StorageSearchNamesOut(items=[r[0] for r in rows if r and r[0]])
+    # 🔧 ให้ทน schema: ค้นทั้ง name และ filename (กรณีบาง DB ยังไม่มี name)
+    rows=(db.query(StorageFile.name, StorageFile.filename)
+            .filter(or_(
+                func.lower(StorageFile.name).like(f"%{qq}%"),
+                func.lower(StorageFile.filename).like(f"%{qq}%"),
+            ))
+            .order_by(StorageFile.name.asc(), StorageFile.filename.asc())
+            .limit(limit)
+            .all())
+    items=[]
+    for n,f in rows:
+        if n: items.append(n)
+        elif f: items.append(f)
+    return StorageSearchNamesOut(items=items)
 
 # ---------- regenerate preview / manifest ----------
 @router.post("/preview/regenerate")

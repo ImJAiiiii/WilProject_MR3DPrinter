@@ -10,8 +10,8 @@
 
 /* Modal */
 .uph-modal{
-  /* ← ปรับความสูงปุ่มจากตัวแปรนี้จุดเดียว */
-  --cta-h: 40px;
+  /* ปรับความสูงปุ่มจากตัวแปรนี้จุดเดียว */
+  --cta-h: 48px;
 
   width: min(1120px, 96vw);
   max-height: calc(100vh - 40px);
@@ -117,28 +117,93 @@
 .uph-dl dt{ color: #0b5ecf; }
 .uph-dl dd{ margin: 0; font-weight: 700; text-align: right; }
 
-/* CTA (Print again) — height from --cta-h */
-.uph-detail .uph-cta{
-  width: 100%;
-  height: var(--cta-h) !important;
-  min-height: var(--cta-h) !important;
-  padding: 0 28px;
-
-  display: flex; align-items: center; justify-content: center;
-  border: none; border-radius: 9999px;
-  background: #0b5ecf; color: #fff;
-
-  font-weight: 800;
-  font-size: 16px; /* ตัวอักษรเล็กลง แต่ปุ่มยังสูง */
-  line-height: 1; white-space: nowrap;
-
-  letter-spacing: .2px; cursor: pointer;
-  box-shadow: 0 8px 22px rgba(11,94,207,.28);
-  transition: filter .15s ease, transform .06s ease;
+/* -------------------- ACTIONS (ปุ่ม) -------------------- */
+.uph-actions{
+  display:flex;
+  gap:14px;
+  align-items:center;
+  justify-content:space-between;
+  margin-top: 12px;
+  flex-wrap: wrap;
 }
-.uph-cta:hover{ filter: brightness(0.95); }
-.uph-cta:active{ transform: translateY(1px); }
-.uph-cta:disabled{ opacity: .6; cursor: not-allowed; }
+
+/* ปุ่มหลัก: Print again */
+.uph-cta{
+  flex: 1 1 auto;
+  height: var(--cta-h);
+  min-height: var(--cta-h);
+  padding: 0 26px;
+
+  display:flex; align-items:center; justify-content:center;
+  border: 0; border-radius: 9999px;
+  color:#fff;
+  background: linear-gradient(180deg, #1d4ed8 0%, #0d5be1 55%, #0b53cb 100%);
+  font-weight:800; font-size:16px; letter-spacing:.2px;
+  white-space: nowrap;
+  cursor:pointer;
+
+  box-shadow: 0 10px 18px rgba(2, 88, 255, .22),
+              0 2px 4px rgba(2, 88, 255, .18) inset;
+  transition: transform .08s ease, box-shadow .18s ease, filter .15s ease, opacity .18s ease;
+}
+.uph-cta:hover:not(:disabled){
+  transform: translateY(-1px);
+  box-shadow: 0 14px 22px rgba(2, 88, 255, .26),
+              0 2px 4px rgba(255,255,255,.12) inset;
+  filter: saturate(1.05);
+}
+.uph-cta:active:not(:disabled){
+  transform: translateY(0);
+  box-shadow: 0 8px 14px rgba(2, 88, 255, .22),
+              0 1px 2px rgba(0,0,0,.12) inset;
+}
+.uph-cta:focus-visible{
+  outline: none;
+  box-shadow:
+    0 0 0 4px rgba(37, 99, 235, .35),
+    0 10px 18px rgba(2, 88, 255, .22);
+}
+.uph-cta:disabled{
+  opacity:.6; cursor:not-allowed; transform:none; box-shadow:none; filter: grayscale(.1);
+}
+
+/* ปุ่มลบ: outline แดง */
+.uph-danger{
+  flex: 0 0 auto;
+  height: var(--cta-h);
+  min-width: 128px;
+  padding: 0 18px;
+
+  border-radius: 14px;
+  background:#fff;
+  color:#dc2626;                 /* red-600 */
+  border:2px solid #fecaca;      /* red-200 */
+  font-weight:700;
+  white-space: nowrap;
+  cursor:pointer;
+
+  box-shadow: 0 2px 10px rgba(220, 38, 38, .08);
+  transition: transform .08s ease, box-shadow .18s ease, background-color .18s ease, border-color .18s ease, color .18s ease, opacity .18s ease;
+}
+.uph-danger:hover:not(:disabled){
+  background:#fee2e2;            /* red-100 */
+  border-color:#fca5a5;          /* red-300 */
+  color:#b91c1c;                 /* red-700 */
+  transform: translateY(-1px);
+}
+.uph-danger:active:not(:disabled){
+  background:#fecaca;            /* red-200 */
+  transform: translateY(0);
+}
+.uph-danger:focus-visible{
+  outline:none;
+  box-shadow:
+    0 0 0 4px rgba(252, 165, 165, .45),
+    0 2px 10px rgba(220, 38, 38, .10);
+}
+.uph-danger:disabled{
+  opacity:.6; cursor:not-allowed; transform:none; box-shadow:none;
+}
 
 /* Empty / Error */
 .uph-empty{
@@ -150,4 +215,10 @@
 @media (max-width: 980px){
   .uph-body{ grid-template-columns: 1fr; }
 }
-/* ถ้าอยากให้ปุ่มสูงเท่ากันทุกจอ—ไม่เปลี่ยน --cta-h ใน media queries อื่น */
+@media (max-width: 560px){
+  .uph-actions{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .uph-danger{ align-self: stretch; text-align:center; }
+}

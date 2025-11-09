@@ -1,8 +1,9 @@
 # backend/printer_status.py
 from __future__ import annotations
-import asyncio, json, os, re, logging, urllib.parse, unicodedata
+import asyncio, json, os, re, logging, urllib.parse, unicodedata, base64
 from datetime import datetime, timedelta
 from typing import Dict, Set, Optional, Tuple
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Body, Query, Header, Cookie
 from fastapi.encoders import jsonable_encoder
@@ -485,29 +486,112 @@ async def stream_status(printer_id: str, request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 # ==============================
-# Snapshot proxy (กล้อง)
+# Snapshot proxy (กล้อง) — with **fallback placeholder**
 # ==============================
+
+# NEW: configurable/local fallback image
+FALLBACK_SNAPSHOT_FILE = _clean_env(os.getenv("FALLBACK_SNAPSHOT_FILE"))
+FALLBACK_SNAPSHOT_URL  = _clean_env(os.getenv("FALLBACK_SNAPSHOT_URL"))  # ถ้ามี จะดึงจาก URL นี้แทนรูปไฟล์
+# 1x1 transparent PNG (base64) — ใช้เมื่อหาไฟล์/URL ไม่ได้จริง ๆ
+_TRANSPARENT_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+)
+
+def _find_default_placeholder_path() -> Optional[Path]:
+    """
+    ค้นหาไฟล์ fixcamera.png ที่พกมากับโปรเจ็กต์ โดยไม่ผูก absolute path
+    ลองหลายตำแหน่งยอดนิยม:
+      - ../frontend/public/icon/fixcamera.png
+      - ../public/icon/fixcamera.png
+      - ./public/icon/fixcamera.png
+      - ../static/icon/fixcamera.png
+    """
+    here = Path(__file__).resolve()
+    cand = [
+        here.parent.parent / "frontend" / "public" / "icon" / "fixcamera.png",
+        here.parent.parent / "public" / "icon" / "fixcamera.png",
+        here.parent / "public" / "icon" / "fixcamera.png",
+        here.parent.parent / "static" / "icon" / "fixcamera.png",
+    ]
+    for p in cand:
+        try:
+            if p.is_file():
+                return p
+        except Exception:
+            pass
+    return None
+
+def _load_placeholder_bytes() -> bytes:
+    # 1) explicit env file
+    if FALLBACK_SNAPSHOT_FILE:
+        p = Path(FALLBACK_SNAPSHOT_FILE)
+        try:
+            if p.is_file():
+                return p.read_bytes()
+        except Exception:
+            log.warning("[SNAPSHOT] cannot read FALLBACK_SNAPSHOT_FILE at %s", p)
+    # 2) explicit env URL
+    if FALLBACK_SNAPSHOT_URL:
+        try:
+            with httpx.Client(timeout=3.0, follow_redirects=True) as c:
+                r = c.get(FALLBACK_SNAPSHOT_URL, headers={"Accept": "image/*"})
+                if r.status_code < 400 and (r.headers.get("Content-Type") or "").startswith("image/"):
+                    return r.content
+        except Exception:
+            log.warning("[SNAPSHOT] fetch FALLBACK_SNAPSHOT_URL failed")
+    # 3) bundled file (repo)
+    p = _find_default_placeholder_path()
+    if p:
+        try:
+            return p.read_bytes()
+        except Exception:
+            pass
+    # 4) ultimate fallback: 1x1 transparent png
+    return _TRANSPARENT_PNG
+
+def _snapshot_headers(ct: str = "image/png") -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Content-Type": ct,
+    }
+
 @router.get("/{printer_id}/snapshot")
-async def proxy_snapshot(printer_id: str, request: Request, src: Optional[str] = None):
+async def proxy_snapshot(
+    printer_id: str,
+    request: Request,
+    src: Optional[str] = None,
+    fallback: bool = Query(default=False, description="force placeholder image"),
+):
+    """
+    ดึงภาพจากกล้องผ่าน proxy:
+      - ถ้าตั้งค่า snapshot URL แล้วดึงไม่ได้ → คืนรูป placeholder (HTTP 200)
+      - ถ้าไม่ได้ตั้ง URL เลย → คืน placeholder เช่นกัน (HTTP 200)
+    ไม่โยน 5xx เพื่อให้ FE ไม่กระพริบ/ค้าง
+    """
+    if fallback:
+        data = _load_placeholder_bytes()
+        return Response(content=data, headers=_snapshot_headers("image/png"), media_type="image/png")
+
     url = (src or SNAPSHOT_URL or "").strip()
-    if not url:
-        raise HTTPException(503, "SNAPSHOT_URL is not configured")
+    # กัน cache
     ts = int(datetime.utcnow().timestamp() * 1000)
-    url = f"{url}{'&' if '?' in url else '?'}ts={ts}"
+    if url:
+        url = f"{url}{'&' if '?' in url else '?'}ts={ts}"
+
     try:
+        if not url:
+            raise RuntimeError("snapshot_url_not_configured")
         async with httpx.AsyncClient(timeout=OCTO_TIMEOUT, follow_redirects=True) as client:
             r = await client.get(url, headers={"Accept": "image/*"})
             r.raise_for_status()
-            headers = {
-                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-                "Pragma": "no-cache",
-                "Content-Type": r.headers.get("Content-Type", "image/jpeg"),
-            }
-            return Response(content=r.content, headers=headers, media_type=headers["Content-Type"])
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(e.response.status_code, f"Snapshot HTTP {e.response.status_code}")
+            ct = r.headers.get("Content-Type", "image/jpeg")
+            return Response(content=r.content, headers=_snapshot_headers(ct), media_type=ct)
     except Exception as e:
-        raise HTTPException(502, f"Snapshot fetch failed: {e}")
+        # แทนที่จะ 5xx → ส่งรูป fallback ออกไป (พร้อม log)
+        log.warning("[SNAPSHOT] use placeholder (reason=%s)", getattr(e, "args", [e.__class__.__name__])[0])
+        data = _load_placeholder_bytes()
+        return Response(content=data, headers=_snapshot_headers("image/png"), media_type="image/png")
 
 # ==============================
 # OctoPrint integration

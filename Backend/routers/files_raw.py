@@ -10,7 +10,16 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse, FileResponse, Response
 
-from auth import get_user_from_header_or_query  # บังคับต้องล็อกอินทุก endpoint
+# ✅ สำคัญ: dependency นี้จะตรวจ token ได้ทั้งจาก Header และ query (?token=)
+from auth import get_user_from_header_or_query
+
+# ---------------- Boot mimetypes ----------------
+# บางเครื่องจะไม่รู้จักนามสกุลเหล่านี้ → ใส่เองให้แน่นอน
+mimetypes.add_type("text/x.gcode", ".gcode")
+mimetypes.add_type("text/x.gcode", ".gco")
+mimetypes.add_type("text/x.gcode", ".gc")
+mimetypes.add_type("model/stl", ".stl")
+mimetypes.add_type("image/png", ".preview.png")  # เผื่อ OS ไม่รู้จักนามสกุลพิเศษ
 
 # ---------------- Config ----------------
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -25,6 +34,7 @@ def _norm_object_key(k: Optional[str]) -> str:
     """
     แก้ปัญหาคีย์ที่มี / นำหน้า หรือมี backslash และ // ซ้อน
     เช่น '%2Fimages%2F3D.png' -> '/images/3D.png' -> 'images/3D.png'
+    * FastAPI จะ decode %2F ให้แล้ว ดังนั้นนี่คือการ clean path
     """
     k = (k or "").strip()
     k = k.replace("\\", "/").lstrip("/")
@@ -41,8 +51,18 @@ if STORAGE_BACKEND == "local":
         # จำกัด namespace และกัน traversal
         if not object_key or ".." in object_key or "://" in object_key:
             raise HTTPException(status_code=400, detail="invalid object_key")
-        if not (object_key.startswith("storage/") or object_key.startswith("staging/")):
-            raise HTTPException(status_code=400, detail="object_key must be under storage/ or staging/")
+
+        # ✅ รองรับทั้ง catalog/, storage/, staging/
+        if not (
+            object_key.startswith("catalog/")
+            or object_key.startswith("storage/")
+            or object_key.startswith("staging/")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="object_key must be under catalog/, storage/ or staging/",
+            )
+
         base = Path(UPLOADS_DIR_ABS).resolve()
         p = (base / object_key).resolve()
         if not str(p).startswith(str(base) + os.sep):
@@ -119,8 +139,8 @@ def _disposition_header(disp_name: str) -> str:
 @router.get("/raw")
 def files_raw(
     request: Request,
-    object_key: str = Query(..., description="object key ของไฟล์ (เช่น staging/xxx.stl หรือ storage/xxx.gcode)"),
-    _user = Depends(get_user_from_header_or_query),
+    object_key: str = Query(..., description="object key ของไฟล์ (เช่น catalog/... หรือ staging/... หรือ storage/...)"),
+    _user = Depends(get_user_from_header_or_query),  # ✅ ใช้ token ได้ทั้ง Header และ ?token=
 ):
     """
     ส่งเนื้อไฟล์ดิบสำหรับพรีวิว/ดาวน์โหลด

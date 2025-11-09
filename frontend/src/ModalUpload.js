@@ -478,12 +478,13 @@ export default function ModalUpload({
         support,
         ...(materialMaybe ? { material: materialMaybe } : {}),
       },
-      ...(s3_prefix ? { s3_prefix } : {}),
+    ...(s3_prefix ? { s3_prefix } : {}),
     };
 
     try {
       setPreparing(true);
-      const data = await api.post('/api/slicer/preview', payload, undefined, { timeout: 60000, retries: 0 });
+      // ⏱️ เพิ่ม timeout เป็น 4 นาที ให้ตรงกับ src/api/index.js
+      const data = await api.post('/api/slicer/preview', payload, undefined, { timeout: 240000, retries: 0 });
 
       const gkFromApi =
         data.gcodeKey || data.gcode_key || data.gcodeId ||
@@ -596,7 +597,8 @@ export default function ModalUpload({
         'prusa-core-one';
       const printerId = normalizePrinterId(printerIdRaw);
 
-      const job = await api.post('/api/print', printPayload, { printer_id: printerId }, { timeout: 30000, retries: 0 });
+      // ⏱️ เพิ่ม timeout เป็น 90s สำหรับกรณี finalize/insert DB หน่วง
+      const job = await api.post('/api/print', printPayload, { printer_id: printerId }, { timeout: 90000, retries: 0 });
 
       // ส่งข้อมูลกลับให้หน้าหลัก (พร้อมรูปจาก WebGL เพื่อโชว์ทันที)
       const timeMin   = printPayload?.time_min  ?? previewData?.result?.time_min ?? previewData?.result?.timeMin ?? null;
