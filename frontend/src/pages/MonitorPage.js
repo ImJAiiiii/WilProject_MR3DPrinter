@@ -19,7 +19,9 @@ export default function MonitorPage({
   printerId = process.env.REACT_APP_PRINTER_ID || "prusa-core-one",
 }) {
   const api = useApi();
-  const { user } = useAuth() || {};
+
+  // ✅ ใช้รูป fallback ภายในไฟล์นี้ (ไม่สร้างไฟล์ใหม่)
+  const NO_IMAGE_URL = "/icon/noimage.png";
 
   // ---- state หลัก ----
   // เริ่มต้นให้รีล: ยังไม่เชื่อม → ออฟไลน์/รอเชื่อมต่อ
@@ -213,9 +215,10 @@ export default function MonitorPage({
             : null
         );
 
+        // ✅ ใช้รูป fallback เสมอเมื่อไม่รู้ URL ภาพ
         setCurrentJob({
           name: fileName || "File Name",
-          thumb: NO_IMAGE_URL, // ใช้รูปสำรองเป็นค่าเริ่มต้น
+          thumb: NO_IMAGE_URL,
           durationMin: estimatedTotal ? Math.round(estimatedTotal / 60) : undefined,
           startedAt: printTime > 0 ? new Date(Date.now() - printTime * 1000).toISOString() : undefined,
           completion,
@@ -283,6 +286,7 @@ export default function MonitorPage({
         // ตั้งชื่อ/รูป และ queue number + owner
         setCurrentJob((prev) => ({
           name: cj?.file_name || prev?.name || "File Name",
+          // ✅ ถ้า BE ไม่มี thumbnail_url → ใช้รูป fallback
           thumb: cj?.thumbnail_url || prev?.thumb || NO_IMAGE_URL,
           durationMin: tm || prev?.durationMin,
           startedAt: stIso || prev?.startedAt,

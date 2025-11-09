@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from jose import jwt  # ใช้สำหรับอ่าน claims โดยไม่ต้อง verify เพื่อดึง exp
 
 from db import get_db
 from models import User
@@ -77,9 +79,39 @@ def refresh(payload: RefreshIn, db: Session = Depends(get_db)):
     return {"access_token": at, "token_type": "bearer"}
 
 
-@router.get("/me", response_model=UserOut)
-def me(user=Depends(get_user_from_header_or_query)):
-    return UserOut.model_validate(user)
+def _read_token_exp_from_auth_header(request: Request) -> Optional[int]:
+    """
+    อ่าน exp (unix seconds) จาก access token ใน Authorization header
+    โดยไม่ verify ลายเซ็น (แค่ดึง claims มาใช้ client-side UX)
+    """
+    try:
+        authz = request.headers.get("Authorization", "")
+        if not authz.startswith("Bearer "):
+            return None
+        token = authz.split(" ", 1)[1]
+        claims = jwt.get_unverified_claims(token)
+        exp = claims.get("exp")
+        return int(exp) if exp is not None else None
+    except Exception:
+        return None
+
+
+@router.get("/me")
+def me(request: Request, user: User = Depends(get_user_from_header_or_query)):
+    """
+    คืนข้อมูลผู้ใช้ + token_exp + server_time
+    - token_exp: เวลาหมดอายุของ access token (unix seconds) ถ้ามี header
+    - server_time: เวลาปัจจุบันฝั่งเซิร์ฟเวอร์ (unix seconds)
+    NOTE: ไม่ใส่ response_model เพื่อเปิดทางให้ฝั่ง FE รับ field เสริมได้อิสระ
+    """
+    user_out = UserOut.model_validate(user).model_dump(mode="json")
+    token_exp = _read_token_exp_from_auth_header(request)
+    server_time = int(datetime.utcnow().timestamp())
+    return {
+        **user_out,
+        "token_exp": token_exp,
+        "server_time": server_time,
+    }
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)

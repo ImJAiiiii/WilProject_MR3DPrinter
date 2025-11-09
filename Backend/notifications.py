@@ -240,15 +240,36 @@ def _canon_type(t: str | None, status: str | None) -> str:
     return _norm_event_type(t, status)
 
 def _norm_severity_from_type(t: str, sev_in: Optional[str]) -> str:
+    """
+    ฝั่งสคีมา (NotificationOut) ยอมรับเฉพาะ: info | success | warning | error
+    - map critical -> error
+    - map neutral  -> warning
+    - default mappingตามชนิดอีเวนต์
+    """
     s = (sev_in or "").strip().lower()
-    if s in {"success","info","warning","error","critical","neutral"}:
+    if s in {"success","info","warning","error"}:
         return s
+    if s == "critical":
+        return "error"
+    if s == "neutral":
+        return "warning"
     return {
         "print.completed": "success",
         "print.failed":    "error",
         "print.paused":    "warning",
-        "print.canceled":  "neutral",
+        "print.canceled":  "warning",
     }.get(t, "info")
+
+# === NEW: normalize severity when reading old rows from DB ====================
+_ALLOWED_SEVERITIES = {"info","success","warning","error"}
+def _normalize_severity_for_out(s: Optional[str]) -> str:
+    ss = (s or "").strip().lower()
+    if ss in _ALLOWED_SEVERITIES:
+        return ss
+    if ss == "critical":
+        return "error"
+    # รวมทุกค่าแปลก ๆ เช่น "neutral", "", None → "info" (หรือจะเลือก "warning" ก็ได้)
+    return "info"
 
 # =============================================================================
 # Bed watcher (internal only; no public "bed empty" user notification)
@@ -344,13 +365,20 @@ def _json(data: dict) -> str:
         return json.dumps({"bad_payload":"<unserializable>"}, ensure_ascii=False)
 
 def _emp(x: Optional[str]) -> str:
-    return str(x or "").strip()
+    return str(x or "").trim()
 
 def _to_out(n: Notification, read_at: Optional[datetime]) -> NotificationOut:
+    # ✅ ป้องกันข้อมูลเก่าใน DB ที่มี severity แปลก ๆ (เช่น "neutral") ทำให้ Pydantic ล้ม
+    sev = _normalize_severity_for_out(getattr(n, "severity", None))
     return NotificationOut(
-        id=n.id, type=n.ntype, severity=n.severity, title=n.title, message=n.message,
+        id=n.id,
+        type=n.ntype,
+        severity=sev,
+        title=n.title,
+        message=n.message,
         data=json.loads(n.data_json) if n.data_json else None,
-        created_at=n.created_at, read=bool(read_at)
+        created_at=n.created_at,
+        read=bool(read_at),
     )
 
 def _rows_to_out(rows: Iterable[Tuple[Notification, Optional[datetime]]]) -> List[NotificationOut]:
@@ -773,7 +801,7 @@ async def notify_job_event(
             "processing": "Your job is starting",
             "completed": "Print completed",
             "failed": "Print failed",
-            "canceled": "Print paused",
+            "canceled": "Print canceled",  # แก้ข้อความให้ถูกต้อง
             "paused": "Print paused",
         }
         title = title_map.get(status, f"Print status: {status or '-'}")
@@ -1500,7 +1528,7 @@ async def ingest_detect_alert(
                 }
                 _spawn(_panel_watchdog, printer_id, panel_payload, interval=12.0)
 
-                # แจ้งเจ้าของ: BOTH paused + issue (same reason)  <<<<<<<<<<<<<<<<<<<<<<<<
+                # แจ้งเจ้าของ: BOTH paused + issue (same reason)
                 ev_paused = format_canonical_event(
                     type="print.paused", status="paused", severity="warning",
                     title="⏸️ Print paused (anomaly detected)",

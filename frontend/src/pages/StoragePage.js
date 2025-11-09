@@ -17,7 +17,7 @@ function parseTs(v) {
 function fmtLocal(ts) { try { return ts ? new Date(ts).toLocaleString() : ""; } catch { return ""; } }
 function getExt(name = "") { const i = name.lastIndexOf("."); return i >= 0 ? name.slice(i + 1).toLowerCase() : ""; }
 function isGcodeExt(ext) { const e = (ext || "").toLowerCase(); return e === "gcode" || e === "gco" || e === "gc"; }
-function useDebounce(value, delay = 250) {
+function useDebounce(value, delay = 300) {
   const [v, setV] = useState(value);
   useEffect(() => { const t = setTimeout(() => setV(value), delay); return () => clearTimeout(t); }, [value, delay]);
   return v;
@@ -33,7 +33,8 @@ function looksLikeFilename(s = "") {
   return false;
 }
 
-const FILTERS = ["ALL", "DELTA", "HONTECH"];
+/* ✅ เพิ่ม OTHER เข้าไปในลิสต์ฟิลเตอร์ */
+const FILTERS = ["ALL", "DELTA", "HONTECH", "OTHER"];
 
 /* ---------- preview helpers (PNG from MinIO) ---------- */
 function joinUrl(base, path) {
@@ -60,7 +61,6 @@ function derivePreviewCandidatesFromGcodeKey(k) {
   if (!k) return [];
   const i = k.lastIndexOf(".");
   const base = i >= 0 ? k.slice(0, i) : k;
-  // กันซ้ำ
   const a = `${base}.preview.png`;
   const b = `${base}_preview.png`;
   return a === b ? [a] : [a, b];
@@ -125,7 +125,13 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     setLoading(true);
     setServerItems(null);
     try {
-      const modelParam = modelFilter === "ALL" ? undefined : modelFilter;
+      /* ✅ map ค่า filter ฝั่ง UI -> ชื่อ model ที่ BE ใช้ */
+      const toApiModel = (x) =>
+        x === "DELTA"   ? "Delta"   :
+        x === "HONTECH" ? "Hontech" :
+        x === "OTHER"   ? "Other"   : undefined;
+      const modelParam = modelFilter === "ALL" ? undefined : toApiModel(modelFilter);
+
       const res = await api.get(
         "/api/storage/catalog",
         {
@@ -166,17 +172,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
       thumbUrl = raw.preview_url;
     } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      // ถ้าเป็น path local (เช่น /images/3D.png) → ใช้ตรง ๆ
-      if (raw.preview_url.startsWith("/images/")) {
-        thumbUrl = raw.preview_url;
-      } else {
-        thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
-      }
+      thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
     }
 
     if (!thumbUrl) {
       if (raw?.thumb) {
-        // เช่น catalog/...preview.png → ใช้ proxy ปกติ
         if (raw.thumb.startsWith("/images/")) {
           thumbUrl = raw.thumb;
         } else {
@@ -348,48 +348,81 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     }
   };
 
+  // helper: ลบออกจาก list ฝั่ง FE แบบ optimistic
+  const removeFromList = useCallback((objKeyOrId) => {
+    setServerItems((prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.filter((r) => (r?.object_key || r?.id) !== objKeyOrId);
+    });
+  }, []);
+
   const handleDelete = async (e, f) => {
     e.stopPropagation();
     if (!canDelete(f) || deletingKey) return;
-    if (!window.confirm(`Delete "${f.name}" ?`)) return;
 
-    setDeletingKey(f.object_key || f.id || f.name);
+    const pretty = f.name || f.object_key || "this file";
+    const ok = window.confirm(
+      `Delete EVERYTHING of "${pretty}"?\n\nThis will remove the G-code, preview image(s), manifest and database records.`
+    );
+    if (!ok) return;
+
+    const keyForState = f.object_key || f.id || f.name;
+
+    setDeletingKey(keyForState);
+    // optimistic remove (ให้การ์ดหายทันที)
+    removeFromList(f.object_key);
+
     try {
-      // 1) ลบด้วย id ถ้ามีฟิลด์ id/StorageFile.id (แม่นสุด)
-      if (f.storageId != null && api.storage?.deleteById) {
-        await api.storage.deleteById(
-          f.storageId,
-          { delete_object_from_s3: true },
-          { timeoutMs: 15000 }
-        );
-      } else if (f.object_key) {
-        // 2) ลบด้วย key (รองรับกรณีที่ดึงมาจาก /catalog ที่ไม่ส่ง id)
-        if (api.storage?.deleteByKey) {
-          await api.storage.deleteByKey(
-            { object_key: f.object_key, delete_object_from_s3: true },
-            { timeoutMs: 15000 }
-          );
-        } else {
-          // fallback ให้แน่ใจว่า param ชื่อ object_key (กันปัญหา key=object_key ซ้อน)
-          await api.del(
-            "/api/storage/by-key",
-            { object_key: f.object_key, delete_object_from_s3: true },
-            { timeoutMs: 15000 }
-          );
-        }
-      }
-      // รีเฟรชจากเซิร์ฟเวอร์
+      // 1) ยิง hard delete ก่อนเสมอ
+      await api.del(
+        "/api/storage/object-hard",
+        { object_key: f.object_key },
+        { timeoutMs: 18000 }
+      );
+      // 2) เผื่อ client-side state ยังมีซากจาก props → ขอรีเฟรชจาก server อีกรอบ
       await fetchServer();
     } catch (error) {
-      console.error("delete failed:", error);
+      console.error("hard delete failed:", error);
       const msg = String(error?.message || error || "Delete failed");
-      if (/403/.test(msg)) {
+      // กรณีไฟล์ถูกใช้ในงานที่ active
+      if (/409|file_in_use_by_active_jobs/i.test(msg)) {
+        alert("This file is currently used by an active print job.\nPlease cancel/finish that job, then try again.");
+      } else if (/403/.test(msg)) {
         alert("You don't have permission to delete this file.");
       } else {
         alert(msg);
       }
-      // ให้ FE fallback ลบการ์ดทิ้งถ้าผู้ใช้ส่ง onDeleteItem มา
-      if (onDeleteItem) onDeleteItem(f.id);
+
+      // Fallback ทางเดิม (ลบหลักอย่างเดียว) เพื่อความเข้ากันได้ย้อนหลัง
+      try {
+        if (f.storageId != null && api.storage?.deleteById) {
+          await api.storage.deleteById(
+            f.storageId,
+            { delete_object_from_s3: true },
+            { timeoutMs: 15000 }
+          );
+        } else if (f.object_key) {
+          if (api.storage?.deleteByKey) {
+            await api.storage.deleteByKey(
+              { object_key: f.object_key, delete_object_from_s3: true },
+              { timeoutMs: 15000 }
+            );
+          } else {
+            await api.del(
+              "/api/storage/by-key",
+              { object_key: f.object_key, delete_object_from_s3: true },
+              { timeoutMs: 15000 }
+            );
+          }
+        }
+      } catch (fallbackErr) {
+        console.warn("fallback delete also failed:", fallbackErr);
+        // ให้ FE แจ้ง parent ถ้ามี
+        if (onDeleteItem) onDeleteItem(f.id);
+      } finally {
+        // รีเฟรชให้สถานะตรงกับจริง
+        await fetchServer();
+      }
     } finally {
       setDeletingKey(null);
     }
@@ -425,7 +458,10 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
                 className={`segmented-btn ${modelFilter === m ? "active" : ""}`}
                 onClick={() => setModelFilter(m)}
               >
-                {m === "ALL" ? "All" : (m === "DELTA" ? "Delta" : "Hontech")}
+                {m === "ALL" ? "All"
+                  : m === "DELTA" ? "Delta"
+                  : m === "HONTECH" ? "Hontech"
+                  : "Other"}
               </button>
             ))}
           </div>

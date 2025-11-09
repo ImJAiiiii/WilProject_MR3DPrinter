@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from db import get_db
 from auth import get_current_user, get_confirmed_user, get_manager_user
-from models import StorageFile, User
+from models import StorageFile, User, PrintJob  # 🔁 เพิ่ม PrintJob
 
 # ===== SCHEMAS: optional import, with local fallbacks =====
 try:
@@ -761,7 +761,7 @@ def list_files(
     rows=rows_q.order_by(StorageFile.uploaded_at.desc(),StorageFile.id.desc()).limit(limit).all()
     return [_to_out(db,r) for r in rows]
 
-# ---------- get / delete ----------
+# ---------- get / delete (เดิม) ----------
 @router.get("/id/{fid}", response_model=StorageFileOut)
 def get_file(fid: int, db: Session=Depends(get_db), me: User=Depends(get_current_user)):
     row=db.query(StorageFile).filter(StorageFile.id==fid).first()
@@ -853,6 +853,129 @@ def delete_my_files_bulk(
         except Exception:
             db.rollback()
     db.commit(); return {"ok":True,"deleted":count}
+
+# ---------- HARD DELETE (ใหม่): ลบให้เกลี้ยง ----------
+_IMG_EXTS = ("png", "jpg", "jpeg", "webp")
+
+def _preview_variants(base_no_ext: str) -> List[str]:
+    outs = []
+    for ext in _IMG_EXTS:
+        outs.append(f"{base_no_ext}.preview.{ext}")
+        outs.append(f"{base_no_ext}_preview.{ext}")
+        outs.append(f"{base_no_ext}_thumb.{ext}")
+        outs.append(f"{base_no_ext}_oriented.preview.{ext}")
+        outs.append(f"{base_no_ext}_oriented_preview.{ext}")
+    return list(dict.fromkeys(outs))
+
+def _family_candidates(object_key: str) -> List[str]:
+    key = object_key.lstrip("/")
+    dir_, name = os.path.split(key)
+    root, _ = os.path.splitext(name)
+    outs = [key]
+    # manifest ที่เป็นไปได้
+    outs += [f"{dir_}/{root}.json", f"{dir_}/{root}.manifest.json", f"{dir_}/{root}_meta.json"]
+    # preview ที่เป็นไปได้
+    outs += _preview_variants(f"{dir_}/{root}")
+    # กวาดไฟล์ขึ้นต้นด้วย root ในโฟลเดอร์เดียวกัน (เช่น *_preview-large.png)
+    try:
+        prefix = f"{dir_.rstrip('/')}/"
+        for obj in list_objects(Prefix=prefix) or []:
+            k = obj.get("Key") or ""
+            base = os.path.basename(k)
+            if base.startswith(root):
+                outs.append(k)
+    except Exception:
+        pass
+    # unique
+    seen=set(); uniq=[]
+    for k in outs:
+        if k and k not in seen:
+            seen.add(k); uniq.append(k)
+    return uniq
+
+def _ensure_owner_or_manager_by_key(db: Session, me: User, object_key: str):
+    row = db.query(StorageFile).filter(StorageFile.object_key == object_key).first()
+    if row is None:
+        # orphan object → อนุญาตเฉพาะ manager
+        if not _is_manager(me):
+            raise HTTPException(403, "Only manager can delete orphan objects")
+        return
+    if not _owner_or_manager(me, row):
+        raise HTTPException(403, "Forbidden")
+
+def _has_active_jobs(db: Session, object_key: str) -> bool:
+    return db.query(PrintJob).filter(
+        PrintJob.gcode_path == object_key,
+        PrintJob.status.in_(("queued","processing","paused","printing")),
+    ).first() is not None
+
+@router.delete("/object-hard")
+def hard_delete_storage_object(
+    object_key: str = Query(..., description="S3 object_key เช่น storage/... หรือ catalog/..."),
+    db: Session = Depends(get_db),
+    me: User = Depends(get_confirmed_user),
+):
+    """
+    ลบไฟล์หลัก + ไฟล์พ่วง (preview/manifest) ทั้งหมดใน S3
+    ลบระเบียน storage_files
+    ลบ print_jobs ที่อ้างไฟล์นี้ (เฉพาะ completed/failed/canceled)
+    กันลบถ้ามีงาน active ใช้ไฟล์นี้อยู่
+    """
+    object_key = _validate_key(object_key).lstrip("/")
+    if not _is_gcode_name(object_key):
+        raise HTTPException(422, "Only G-code objects can be hard-deleted")
+
+    _ensure_owner_or_manager_by_key(db, me, object_key)
+
+    if _has_active_jobs(db, object_key):
+        raise HTTPException(status_code=409, detail="file_in_use_by_active_jobs")
+
+    # รวบรวม key ทั้งบ้าน
+    keys = _family_candidates(object_key)
+
+    deleted, skipped = [], []
+    for k in keys:
+        try:
+            # ลบเฉพาะที่มีจริง
+            try:
+                head_object(k)
+            except Exception:
+                skipped.append(k); continue
+            delete_object(k)
+            deleted.append(k)
+        except Exception:
+            skipped.append(k)
+
+    # ลบระเบียน storage_files (ตัวหลัก + ไฟล์พ่วง)
+    try:
+        (db.query(StorageFile)
+           .filter(StorageFile.object_key.in_(keys))
+           .delete(synchronize_session=False))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    # ลบ print history ที่อ้างไฟล์นี้ (จบแล้ว)
+    removed_jobs = 0
+    try:
+        jobs = db.query(PrintJob).filter(
+            PrintJob.gcode_path == object_key,
+            PrintJob.status.in_(("completed","failed","canceled")),
+        ).all()
+        for j in jobs:
+            db.delete(j); removed_jobs += 1
+        if removed_jobs:
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    return {
+        "ok": True,
+        "object_key": object_key,
+        "deleted": deleted,
+        "skipped": skipped,
+        "purged_history": removed_jobs,
+    }
 
 # ---------- presign / head / range ----------
 @router.get("/presign")

@@ -65,10 +65,13 @@ const allowHint = (n = '') => {
   return NAME_REGEX.test(stem);
 };
 
-/* ---------- MODEL helpers (HONTECH / DELTA เท่านั้น) ---------- */
+/* ---------- MODEL helpers (HONTECH / DELTA / Other) ---------- */
 const normalizeModel = (m = '') => {
   const up = String(m || '').trim().toUpperCase();
-  return up === 'HONTECH' ? 'HONTECH' : up === 'DELTA' ? 'DELTA' : null;
+  if (up === 'HONTECH') return 'HONTECH';
+  if (up === 'DELTA') return 'DELTA';
+  if (up === 'OTHER') return 'OTHER'; // 👈 รองรับ Other
+  return null;
 };
 
 // โฟลเดอร์สำหรับ S3/MinIO ให้เป็น: catalog/<MODEL>/<BaseName_VN>/
@@ -104,7 +107,7 @@ export default function ModalUpload({
   const [error, setError] = useState('');
 
   // form
-  const [model, setModel] = useState('');
+  const [model, setModel] = useState(''); // 'HONTECH' | 'DELTA' | '__OTHER'
   const [userFileName, setUserFileName] = useState('');
   const [infill, setInfill] = useState(15);
   const [walls, setWalls] = useState(2);
@@ -135,6 +138,11 @@ export default function ModalUpload({
 
   const isGcode = isGcodeExt(fileExt);
   const isMesh  = isMeshExt(fileExt);
+
+  // ใช้ชื่อโมเดลที่จะเซฟจริง: ถ้าเลือก Other → ใช้ "Other"
+  const effectiveModel = useMemo(() => {
+    return model === '__OTHER' ? 'OTHER' : model || '';
+  }, [model]);
 
   const openPicker = () => {
     if (preparing || confirming) return;
@@ -169,7 +177,7 @@ export default function ModalUpload({
     });
 
     if (!res.ok) {
-      const txt = await res.text().catch(()=>'');
+      const txt = await res.text().catch(()=> '');
       throw new Error(`upload request failed: ${res.status} ${txt || ''}`.trim());
     }
 
@@ -363,7 +371,7 @@ export default function ModalUpload({
 
   /* ---------- validation ---------- */
   const nameOk = NAME_REGEX.test((userFileName || '').trim());
-  const canPrepare = status === 'done' && nameOk && !!model && !nameExists && !preparing;
+  const canPrepare = status === 'done' && nameOk && !!effectiveModel && !nameExists && !preparing;
 
   const applyInfill = (val) => {
     let n = Number(val);
@@ -457,13 +465,13 @@ export default function ModalUpload({
     const materialMaybe = !isGcode ? material : undefined;
 
     // ส่ง prefix โครงใหม่: catalog/<MODEL>/<BaseName_VN>/
-    const s3_prefix = modelToS3Prefix(model, (userFileName || '').trim());
+    const s3_prefix = modelToS3Prefix(effectiveModel, (userFileName || '').trim());
 
     const payload = {
       fileId,
       originExt: fileExt,
       jobName: (userFileName || '').trim(),
-      model,
+      model: effectiveModel, // << ใช้ "Other" เมื่อเลือก Other
       slicing: isGcode ? null : {
         infill: Number(infill),
         walls: Number(walls),
@@ -501,7 +509,7 @@ export default function ModalUpload({
           walls  : data.settings?.walls   ?? (isGcode ? 2  : Number(walls)),
           support: data.settings?.support ?? (isGcode ? 'none' : support),
           ...(materialMaybe ? { material: data.settings?.material ?? materialMaybe } : {}),
-          model,
+          model: effectiveModel, // << ติด model ไว้ใน preview ด้วย
           name: (userFileName || '').trim(),
         },
         result: data.result || null,
@@ -548,7 +556,7 @@ export default function ModalUpload({
             object_key: gk,
             filename  : finalName,
             content_type: 'text/x.gcode',
-            model,
+            model: effectiveModel, // << ให้ BE สร้างใต้ catalog/Other/... ได้
           });
           finalGcodeKey = fin?.object_key || fin?.gcode_key;
           if (!finalGcodeKey) throw new Error('missing object_key');
@@ -596,7 +604,7 @@ export default function ModalUpload({
       const filamentG = printPayload?.filament_g ?? previewData?.result?.filament_g ?? previewData?.result?.filamentG ?? null;
 
       const settings = {
-        model   : previewData?.settings?.model ?? model ?? null,
+        model   : previewData?.settings?.model ?? effectiveModel ?? null,
         printer : printerId,
         infill  : previewData?.settings?.infill ?? Number(infill),
         walls   : previewData?.settings?.walls ?? Number(walls),
@@ -773,6 +781,7 @@ export default function ModalUpload({
                       <option value="" disabled hidden>Select</option>
                       <option value="HONTECH">HONTECH</option>
                       <option value="DELTA">DELTA</option>
+                      <option value="__OTHER">OTHER</option>
                     </select>
                   </div>
 

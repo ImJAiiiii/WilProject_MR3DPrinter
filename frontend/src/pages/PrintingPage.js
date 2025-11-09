@@ -26,6 +26,9 @@ export default function PrintingPage({
     process.env.REACT_APP_API_BASE ||
     "";
 
+  // ✅ รูป fallback กลาง (ห้ามสร้างไฟล์ใหม่): ชี้ไปที่ public/icon/noimage.png
+  const NO_IMAGE_URL = "/icon/noimage.png";
+
   const [fabOpen, setFabOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
@@ -186,7 +189,7 @@ export default function PrintingPage({
     requestAnimationFrame(() => gotoStorage?.());
   };
 
-  // ใช้รูปสำรองเดียว
+  // ❌ ลบ placeholder/fallback เดิม → ✅ ใช้รูปเดียว
   const onImgError = (e) => {
     // กันลูปกรณี noimage.png พังด้วย
     if (e.currentTarget.dataset.fallback === "1") return;
@@ -324,7 +327,7 @@ export default function PrintingPage({
   // ดึงรูป preview สำหรับตาราง
   // ปรับลำดับชัดเจน:
   // (A) ถ้าเป็น Custom Storage / User History → ใช้ MinIO preview ก่อน, ถ้าไม่เจอค่อยถอยไป snapshot/อื่น ๆ
-  // (B) งานทั่วไป → เดิม
+  // (B) งานทั่วไป → เดิม แต่ fallback เป็น NO_IMAGE_URL
   const pickPreview = (job) => {
     const cacheTag =
       job?.updated_at || job?.uploaded_at || job?.created_at || job?.started_at || job?.id || Date.now();
@@ -353,7 +356,7 @@ export default function PrintingPage({
       return NO_IMAGE_URL;
     }
 
-    // ----- งานทั่วไป (เดิม) -----
+    // ----- งานทั่วไป -----
     const snap = getSnapshotFromCache(job);
     if (snap) return snap;
 
