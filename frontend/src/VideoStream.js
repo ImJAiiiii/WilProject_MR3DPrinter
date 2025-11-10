@@ -7,20 +7,28 @@ import { API_BASE } from "./api";
 
 const PRINTER_ID = process.env.REACT_APP_PRINTER_ID || "prusa-core-one";
 
-// STREAM_URL: ถ้ามีก็เลือกโหมดจาก REACT_APP_STREAM_MODE = "mjpeg" | "video"
-// ไม่ตั้ง → เดาให้: มี "action=stream" => mjpeg, ไม่งั้น video
-const STREAM_URL = (process.env.REACT_APP_STREAM_URL || "").trim();
+// ===== Stream envs =====
+const STREAM_URL_RAW = (process.env.REACT_APP_STREAM_URL || "").trim();
 const STREAM_MODE_ENV = (process.env.REACT_APP_STREAM_MODE || "").trim().toLowerCase();
+const DIRECT_SNAPSHOT_RAW = (process.env.REACT_APP_SNAPSHOT_URL || "").trim();
+const SNAPSHOT_FPS_ENV = Number(process.env.REACT_APP_SNAPSHOT_FPS || "");
 
-// snapshot โดยตรง (ถ้าต้องยิงตรง) — ถ้าไม่ใส่ จะใช้ proxy ของ backend
-const DIRECT_SNAPSHOT = (process.env.REACT_APP_SNAPSHOT_URL || "").trim();
-
+// ===== helpers =====
 function decideStreamMode(url, envMode) {
   if (!url) return "snapshot";
   if (envMode === "mjpeg" || envMode === "video") return envMode;
-  // เดาอัตโนมัติ
   if (/action=stream|mjpg|mjpeg/i.test(url)) return "mjpeg";
   return "video";
+}
+
+function isSameSecureScheme(url) {
+  try {
+    const u = new URL(url, window.location.origin);
+    if (window.location.protocol === "https:") return u.protocol === "https:";
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function VideoStream({
@@ -29,193 +37,160 @@ export default function VideoStream({
   state = "idle",
   job,
   queueNumber,
-  // ปรับความลื่น snapshot ได้ที่นี่
-  targetFps = 15,
-  minFpsHidden = 3,
-  // ปรับการยืดภาพหากต้องการ: "contain" | "cover"
+  // ปรับภาพให้พอดี
   objectFit = "contain",
+  // ถ้าไม่ได้ตั้ง env จะใช้ค่าดีฟอลต์นี้
+  targetFps = Number.isFinite(SNAPSHOT_FPS_ENV) && SNAPSHOT_FPS_ENV > 0 ? SNAPSHOT_FPS_ENV : 8,
+  minFpsHidden = 3,
 }) {
-  /* ---------------- mode & urls ---------------- */
-  const mode = useMemo(() => decideStreamMode(STREAM_URL, STREAM_MODE_ENV), [STREAM_URL, STREAM_MODE_ENV]);
+  // ---------- mode/url ----------
+  const streamUrl = STREAM_URL_RAW || "";
+  const mode = useMemo(() => decideStreamMode(streamUrl, STREAM_MODE_ENV), [streamUrl]);
   const isStreamMJPEG = mode === "mjpeg";
   const isStreamVideo = mode === "video";
-  const useSnapshot = !STREAM_URL || mode === "snapshot";
+  const [hint, setHint] = useState("");
 
-  const baseSnapshotUrl = useMemo(
-    () =>
-      DIRECT_SNAPSHOT ||
-      `${API_BASE}/printers/${encodeURIComponent(PRINTER_ID)}/snapshot`,
-    [DIRECT_SNAPSHOT, API_BASE, PRINTER_ID]
-  );
+  const baseSnapshotUrl = useMemo(() => {
+    if (DIRECT_SNAPSHOT_RAW && isSameSecureScheme(DIRECT_SNAPSHOT_RAW)) {
+      return DIRECT_SNAPSHOT_RAW;
+    }
+    if (DIRECT_SNAPSHOT_RAW && !isSameSecureScheme(DIRECT_SNAPSHOT_RAW)) {
+      setHint("Blocked mixed-content: fallback to backend proxy snapshot");
+    }
+    const base = (API_BASE || "").replace(/\/+$/, "");
+    return `${base}/printers/${encodeURIComponent(PRINTER_ID)}/snapshot`;
+  }, []);
 
-  /* ---------------- common states ---------------- */
+  const useSnapshot = !streamUrl || (streamUrl && !isSameSecureScheme(streamUrl));
+
+  // ---------- states ----------
   const [isPlaying, setIsPlaying] = useState(true);
 
-  /* ---------------- video mode ---------------- */
+  // ---------- <video> (ไม่แตะ ส่วนนี้เดิม) ----------
   const videoRef = useRef(null);
   useEffect(() => {
-    if (!isStreamVideo) return;
+    if (!isStreamVideo || useSnapshot) return;
     const el = videoRef.current;
     if (!el) return;
 
-    // reset ก่อนสลับโหมด/URL เพื่อกันเฟรมค้าง
-    try {
-      el.pause();
-      el.removeAttribute("src");
-      el.load?.();
-    } catch {}
-
-    el.src = STREAM_URL;
+    try { el.pause(); el.removeAttribute("src"); el.load?.(); } catch {}
+    el.src = streamUrl;
     el.muted = true;
     el.playsInline = true;
     el.preload = "none";
 
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onError = () => setIsPlaying(false);
+    const onError = () => { setIsPlaying(false); setHint("Stream error → snapshot fallback"); };
 
     el.addEventListener("play", onPlay);
     el.addEventListener("pause", onPause);
     el.addEventListener("error", onError);
 
-    (async () => {
-      try {
-        await el.play();
-      } catch {
-        setIsPlaying(false);
-      }
-    })();
+    (async () => { try { await el.play(); } catch { setIsPlaying(false); } })();
 
     return () => {
       el.removeEventListener("play", onPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("error", onError);
-      try {
-        el.pause();
-        el.removeAttribute("src");
-        el.load?.();
-      } catch {}
+      try { el.pause(); el.removeAttribute("src"); el.load?.(); } catch {}
     };
-  }, [isStreamVideo, STREAM_URL]);
+  }, [isStreamVideo, streamUrl, useSnapshot]);
 
-  /* ---------------- mjpeg mode ---------------- */
-  // mjpeg ใช้ <img src=STREAM_URL> ตรง ๆ ลื่นสุด (ไม่ยุ่ง canvas/blob)
+  // ---------- Snapshot: dual visible buffers (no flicker) ----------
+  const [srcA, setSrcA] = useState("");
+  const [srcB, setSrcB] = useState("");
+  const [showA, setShowA] = useState(true); // true = แสดง A, false = แสดง B
 
-  /* ---------------- snapshot (double buffer + adaptive FPS) ---------------- */
-  const [snapSrc, setSnapSrc] = useState(""); // src ปัจจุบันที่แสดง
   const errCountRef = useRef(0);
   const runningRef = useRef(false);
-  const lastCostRef = useRef(0);
 
   useEffect(() => {
     if (!useSnapshot) return;
     runningRef.current = true;
 
-    const imgA = new Image();
-    const imgB = new Image();
-    let cur = imgA;
-    let nxt = imgB;
+    // offscreen loaders
+    const loaderA = new Image();
+    const loaderB = new Image();
+    loaderA.crossOrigin = loaderB.crossOrigin = "anonymous";
 
-    // ให้ browser ทำงานข้าม-origin แบบนิ่ง ๆ ถ้า backend เปิด CORS รูปไว้
-    cur.crossOrigin = "anonymous";
-    nxt.crossOrigin = "anonymous";
+    let active = "A"; // กำลังโหลดภาพเข้าบัฟเฟอร์ไหน (ตรงข้ามกับที่โชว์)
+    let timerId = null;
 
     const makeUrl = () =>
       `${baseSnapshotUrl}${baseSnapshotUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
 
-    const schedule = (costMs) => {
-      lastCostRef.current = costMs;
-
-      // โหมดลด FPS เมื่อแท็บไม่โฟกัส
-      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
-      const wantFps = hidden ? Math.max(minFpsHidden, Math.floor(targetFps / 3)) : targetFps;
-
-      const frameBudget = Math.max(0, 1000 / wantFps - costMs);
-      const id = setTimeout(() => {
-        if (runningRef.current && isPlaying) {
-          // ใช้ rAF เพื่อให้ sync กับเฟรมเรนเดอร์
-          requestAnimationFrame(tick);
-        }
-      }, frameBudget);
-      // กัน memory leak หากถูก unmount ระหว่าง timeout
-      schedule._t = id;
+    const schedule = (delayMs) => {
+      timerId = setTimeout(() => {
+        if (runningRef.current && isPlaying) requestAnimationFrame(tick);
+      }, delayMs);
     };
 
     const tick = () => {
       if (!runningRef.current) return;
-      const t0 = performance.now();
 
-      nxt.onload = () => {
-        // อัปเดต src ที่โชว์ แล้วสลับ buffer
-        setSnapSrc(nxt.src);
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      const wantFps = hidden ? Math.max(minFpsHidden, Math.floor(targetFps / 3)) : targetFps;
+      const budget = Math.max(0, 1000 / Math.max(1, wantFps));
 
-        // สลับ
-        const t1 = performance.now();
-        const cost = t1 - t0;
+      const target = active === "A" ? loaderA : loaderB;
+      target.onload = () => {
+        if (!runningRef.current) return;
 
-        const tmp = cur;
-        cur = nxt;
-        nxt = tmp;
+        if (active === "A") {
+          setSrcA(target.src);
+          setShowA(true);   // โชว์ A, ซ่อนไว้ B
+          active = "B";     // รอบหน้าวนไปโหลด B
+        } else {
+          setSrcB(target.src);
+          setShowA(false);  // โชว์ B
+          active = "A";
+        }
 
-        // reset error
         errCountRef.current = 0;
-
-        // เตรียมรอบต่อไป
-        schedule(cost);
+        schedule(budget);
       };
 
-      nxt.onerror = () => {
+      target.onerror = () => {
         errCountRef.current = Math.min(99, errCountRef.current + 1);
-        // backoff เล็กน้อยเมื่อ error
-        const id = setTimeout(() => {
-          if (runningRef.current && isPlaying) requestAnimationFrame(tick);
-        }, 300);
-        tick._t = id;
+        schedule(Math.max(300, budget)); // backoff เล็กน้อย
       };
 
-      // กัน cache
-      nxt.src = makeUrl();
+      target.src = makeUrl();
     };
 
-    // เริ่ม
     if (isPlaying) requestAnimationFrame(tick);
 
-    // cleanup
     return () => {
       runningRef.current = false;
-      // ยกเลิก timer ที่ยังค้าง
-      if (schedule._t) clearTimeout(schedule._t);
-      if (tick._t) clearTimeout(tick._t);
-      // ตัด handler กันเก็บอ้างอิงไม่จำเป็น
-      cur.onload = cur.onerror = null;
-      nxt.onload = nxt.onerror = null;
+      if (timerId) clearTimeout(timerId);
+      loaderA.onload = loaderA.onerror = null;
+      loaderB.onload = loaderB.onerror = null;
     };
   }, [useSnapshot, baseSnapshotUrl, isPlaying, targetFps, minFpsHidden]);
 
-  /* ---------------- controls ---------------- */
+  // ---------- controls ----------
   const togglePlayPause = async () => {
-    if (isStreamVideo) {
+    if (isStreamVideo && !useSnapshot) {
       const el = videoRef.current;
       if (!el) return;
       if (el.paused || el.ended) {
-        try {
-          await el.play();
-          setIsPlaying(true);
-        } catch {}
+        try { await el.play(); setIsPlaying(true); } catch {}
       } else {
-        el.pause();
-        setIsPlaying(false);
+        el.pause(); setIsPlaying(false);
       }
     } else {
-      setIsPlaying((v) => !v);
+      setIsPlaying(v => !v);
     }
   };
+
+  const mixedBlocked = streamUrl && !isSameSecureScheme(streamUrl);
 
   return (
     <div className="video-stream">
       <div className="video-block">
         <div className="video-wrapper">
-          {isStreamVideo ? (
+          {isStreamVideo && !useSnapshot ? (
             <video
               ref={videoRef}
               className="video-el"
@@ -225,27 +200,58 @@ export default function VideoStream({
               preload="none"
               style={{ width: "100%", height: "100%", objectFit }}
             />
-          ) : isStreamMJPEG ? (
+          ) : isStreamMJPEG && !useSnapshot ? (
             <img
               className="video-el"
               alt="live"
-              src={STREAM_URL}
+              src={streamUrl}
               decoding="async"
               fetchpriority="high"
               referrerPolicy="no-referrer"
               style={{ width: "100%", height: "100%", objectFit }}
             />
           ) : (
-            <img
-              className="video-el"
-              alt="Printer camera snapshot"
-              // ใส่ src เมื่อมีเท่านั้น กัน src="" (บางเบราว์เซอร์จะยิงรีเควสต์ซ้ำ)
-              {...(snapSrc ? { src: snapSrc } : {})}
-              decoding="async"
-              fetchpriority="high"
-              referrerPolicy="no-referrer"
-              style={{ width: "100%", height: "100%", objectFit }}
-            />
+            <>
+              {/* สองบัฟเฟอร์ “บนจอ” สลับ opacity → ไม่กะพริบ */}
+              <img
+                alt=""
+                decoding="async"
+                fetchpriority="high"
+                referrerPolicy="no-referrer"
+                src={srcA || undefined}
+                className="video-el"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit,
+                  transition: "opacity 80ms linear",
+                  opacity: showA ? 1 : 0,
+                  willChange: "opacity",
+                  backfaceVisibility: "hidden",
+                }}
+              />
+              <img
+                alt="Printer camera snapshot"
+                decoding="async"
+                fetchpriority="high"
+                referrerPolicy="no-referrer"
+                src={srcB || undefined}
+                className="video-el"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit,
+                  transition: "opacity 80ms linear",
+                  opacity: showA ? 0 : 1,
+                  willChange: "opacity",
+                  backfaceVisibility: "hidden",
+                }}
+              />
+            </>
           )}
 
           <div className="video-controls">
@@ -267,14 +273,13 @@ export default function VideoStream({
             </button>
           </div>
 
-          {/* snapshot โชว์ hint เมื่อ error ติดต่อกันเยอะ ๆ */}
-          {useSnapshot && errCountRef.current >= 3 && (
+          {(hint || mixedBlocked || (useSnapshot && errCountRef.current >= 3)) && (
             <div className="video-hint">
-              โหลดภาพจากกล้องช้า/ขาดช่วง
-              <br />
-              URL: <code>{baseSnapshotUrl}</code>
-              <br />
-              (แนะนำลดความละเอียด/เฟรมเรตที่กล้อง หรือใช้โหมด MJPEG ถ้ามี)
+              {mixedBlocked && <>Stream URL is blocked by mixed-content → using snapshot via proxy.<br/></>}
+              {hint && <>{hint}<br/></>}
+              {useSnapshot && errCountRef.current >= 3 && (
+                <>Snapshot loading is slow/unstable. URL: <code>{baseSnapshotUrl}</code></>
+              )}
             </div>
           )}
         </div>
@@ -288,11 +293,7 @@ export default function VideoStream({
         </div>
       </div>
 
-      <PrintControls
-        printerId={PRINTER_ID}
-        job={job}
-        queueNumber={queueNumber}
-      />
+      <PrintControls printerId={PRINTER_ID} job={job} queueNumber={queueNumber} />
     </div>
   );
 }

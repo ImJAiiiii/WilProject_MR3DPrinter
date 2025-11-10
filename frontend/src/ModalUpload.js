@@ -90,8 +90,7 @@ export default function ModalUpload({
   onUploaded,
   onQueue,
 }) {
-  if (!isOpen) return null;
-
+  // ✅ เรียก hooks ทั้งหมดไว้ "ชั้นบนสุด" เสมอ ห้ามมี early return ก่อนถึงจุดนี้
   const api = useApi();
   const { token } = useAuth();
 
@@ -128,7 +127,6 @@ export default function ModalUpload({
   // กันชื่อซ้ำ + hints
   const [nameLoading, setNameLoading] = useState(false);
   const [nameHints, setNameHints] = useState([]);        // string[]
-  const [similarItems, setSimilarItems] = useState([]);  // object[] (optional)
   const [nameExists, setNameExists] = useState(false);
   const [nameError, setNameError] = useState('');
   const [nameFocus, setNameFocus] = useState(false);
@@ -364,7 +362,6 @@ export default function ModalUpload({
     setPreviewOpen(false);
     setPreviewData(null);
     setNameHints([]);
-    setSimilarItems([]);
     setNameExists(false);
     setNameError('');
   };
@@ -393,12 +390,14 @@ export default function ModalUpload({
 
   /* ---------- หา “ชื่อคล้าย” + กันชื่อซ้ำ ---------- */
   useEffect(() => {
+    // ✅ hook ถูกเรียกเสมอ แต่เราจะ skip logic เมื่อ modal ปิด
+    if (!isOpen) return;
+
     let cancelled = false;
     async function run() {
       setNameError('');
       setNameExists(false);
       setNameHints([]);
-      setSimilarItems([]);
 
       const q = (userFileName || '').trim();
       if (!q || q.length < 2) return;
@@ -444,7 +443,7 @@ export default function ModalUpload({
     }
     run();
     return () => { cancelled = true; };
-  }, [api, queryKey, userFileName]);
+  }, [api, queryKey, userFileName, isOpen]);
 
   const onPickHint = (name) => {
     setUserFileName(name);
@@ -478,7 +477,7 @@ export default function ModalUpload({
         support,
         ...(materialMaybe ? { material: materialMaybe } : {}),
       },
-    ...(s3_prefix ? { s3_prefix } : {}),
+      ...(s3_prefix ? { s3_prefix } : {}),
     };
 
     try {
@@ -684,22 +683,15 @@ export default function ModalUpload({
     (previewData?.gcodeKey || previewData?.gcodeUrl || '') +
     (previewOpen ? ':open' : ':closed');
 
-  // เลือก “รายการที่ใกล้เคียงสุด” (optional)
-  const topSimilar = useMemo(() => {
-    if (!similarItems?.length) return null;
-    const q = (userFileName || '').trim().toLowerCase();
-    const pickName = (x) => (x?.name || x?.file_name || x?.filename || x?.original_name || '').toLowerCase();
-    return similarItems
-      .map(x => ({ x, score: scoreSimilarity(pickName(x), q) }))
-      .sort((a, b) => b.score - a.score)[0]?.x || null;
-  }, [similarItems, userFileName]);
-
   // ข้อความ error ใต้ช่องชื่อไฟล์
   const nameErrorMsg = (() => {
     if (nameError) return nameError;
     const invalidByRegex = !!(userFileName && !NAME_REGEX.test((userFileName || '').trim()));
     return invalidByRegex ? 'Name must be like ModelName_V1' : '';
   })();
+
+  // ✅ ค่อยคัดออกตอนท้าย หลังจาก hooks ทั้งหมดถูกเรียกแล้ว
+  if (!isOpen) return null;
 
   return (
     <>
@@ -813,6 +805,7 @@ export default function ModalUpload({
                             <li
                               key={n}
                               role="option"
+                              aria-selected="false"
                               onMouseDown={(e) => { e.preventDefault(); onPickHint(n); }}
                             >
                               {n}
@@ -990,27 +983,4 @@ function useDebounce(value, delay = 250) {
     return () => clearTimeout(t);
   }, [value, delay]);
   return v;
-}
-
-function scoreSimilarity(nameLower = '', qLower = '') {
-  if (!nameLower || !qLower) return 0;
-  if (nameLower === qLower) return 100;
-  if (nameLower.startsWith(qLower)) return 90;
-  if (nameLower.includes(qLower)) return 75;
-  const overlap = lcsLen(nameLower, qLower);
-  return Math.round(50 * (overlap / Math.max(1, qLower.length)));
-}
-
-function lcsLen(a, b) {
-  const m = a.length, n = b.length;
-  const dp = new Array(n + 1).fill(0);
-  for (let i = 1; i <= m; i++) {
-    let prev = 0;
-    for (let j = 1; j <= n; j++) {
-      const tmp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev + 1 : Math.max(dp[j], dp[j - 1]);
-      prev = tmp;
-    }
-  }
-  return dp[n];
 }

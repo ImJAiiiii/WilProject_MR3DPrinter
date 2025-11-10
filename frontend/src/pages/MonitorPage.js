@@ -6,6 +6,19 @@ import VideoStream from "../VideoStream";
 import RightPanel from "../RightPanel";
 import { useApi } from "../api";
 
+/* ---------- helper ---------- */
+const shallowEq = (a, b) => {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+};
+
 /**
  * MonitorPage
  * - SSE: /printers/:id/status/stream  (แนบ ?token= อัตโนมัติผ่าน useApi.sseWithBackoff)
@@ -17,26 +30,22 @@ export default function MonitorPage({
 }) {
   const api = useApi();
 
-  // ✅ ใช้รูป fallback ภายในไฟล์นี้ (ไม่สร้างไฟล์ใหม่)
-  const NO_IMAGE_URL = "/icon/noimage.png";
+  // ใช้รูป fallback จาก public
+  const NO_IMAGE_URL = (process.env.PUBLIC_URL || "") + "/icon/noimage.png";
 
   // ---- state หลัก ----
-  // เริ่มต้นให้รีล: ยังไม่เชื่อม → ออฟไลน์/รอเชื่อมต่อ
   const [printerOnline, setPrinterOnline] = useState(false);
-  const [printerStatus, setPrinterStatus] = useState("Offline — waiting for connection"); // status_text
+  const [printerStatus, setPrinterStatus] = useState("Offline — waiting for connection");
   const [printState, setPrintState] = useState("offline"); // printing | paused | error | ready | offline | idle
 
-  const [estimatedSeconds, setEstimatedSeconds] = useState(0);     // เวลารวมที่จะพิมพ์เสร็จ (วินาที)
-  const [startedAt, setStartedAt] = useState(null);                // ISO string | null
-  const [remainingSeconds, setRemainingSeconds] = useState(null);  // วินาที | null
+  const [estimatedSeconds, setEstimatedSeconds] = useState(0);
+  const [startedAt, setStartedAt] = useState(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(null);
 
-  const [currentJob, setCurrentJob] = useState(null);              // { name, thumb, durationMin?, startedAt?, completion? }
+  const [currentJob, setCurrentJob] = useState(null); // { name, thumb, durationMin?, startedAt?, completion? }
   const [currentQueueNumber, setCurrentQueueNumber] = useState(null);
-
-  // material ของงานปัจจุบัน (จาก OctoPrint/BE)
   const [material, setMaterial] = useState(null);
 
-  // ---- helper แปลง state เป็นกลุ่ม ----
   const normalizeState = (s) => {
     const t = String(s || "").toLowerCase();
     if (t.includes("error") || t.includes("fail")) return "error";
@@ -47,19 +56,25 @@ export default function MonitorPage({
     return t || "idle";
   };
 
-  // track mount ป้องกัน setState หลัง unmount
+  // track mount
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
 
-  // ---- SSE: /printers/:id/status/stream → online/state/status_text/progress ----
+  // ---- SSE: /printers/:id/status/stream ----
   const sseCloserRef = useRef(null);
   const lastSseAtRef = useRef(0);
 
+  // เก็บค่าล่าสุดไว้เทียบ เพื่อลด setState ซ้ำ
+  const lastStatusRef = useRef({
+    online: null,
+    statusText: null,
+    state: null,
+  });
+
   useEffect(() => {
-    // ปิด connection เก่าก่อน
     try { sseCloserRef.current?.close?.(); } catch {}
     sseCloserRef.current = null;
 
@@ -71,18 +86,28 @@ export default function MonitorPage({
         if (!ev || typeof ev.data !== "string" || !ev.data.trim()) return;
         try {
           const msg = JSON.parse(ev.data);
-          // backend ส่ง { type: "status", data: PrinterStatusOut }
           const s = msg?.data || msg;
           const online = typeof s?.is_online === "boolean" ? s.is_online : !!s?.online;
-          if (!mountedRef.current) return;
+          const st = normalizeState(s?.state);
+          const statusText = s?.status_text || (online ? "Printer is ready" : "Offline — waiting for connection");
 
           lastSseAtRef.current = Date.now();
-          setPrinterOnline(online);
-          const st = normalizeState(s?.state);
-          setPrintState(st);
-          setPrinterStatus(s?.status_text || (online ? "Printer is ready" : "Offline — waiting for connection"));
+          if (!mountedRef.current) return;
 
-          // เมื่อไม่อยู่ในโหมดพิมพ์ เคลียร์ค่าที่อาจหลงเหลือ
+          // อัปเดตเฉพาะเมื่อเปลี่ยนจริง
+          if (lastStatusRef.current.online !== online) {
+            setPrinterOnline(online);
+            lastStatusRef.current.online = online;
+          }
+          if (lastStatusRef.current.state !== st) {
+            setPrintState(st);
+            lastStatusRef.current.state = st;
+          }
+          if (lastStatusRef.current.statusText !== statusText) {
+            setPrinterStatus(statusText);
+            lastStatusRef.current.statusText = statusText;
+          }
+
           if (st !== "printing" && st !== "paused") {
             setRemainingSeconds(null);
             setEstimatedSeconds(0);
@@ -91,7 +116,7 @@ export default function MonitorPage({
             setMaterial(null);
           }
         } catch {
-          // ignore malformed payload
+          /* ignore */
         }
       },
       onError: () => {
@@ -99,6 +124,7 @@ export default function MonitorPage({
         setPrinterOnline(false);
         setPrintState("offline");
         setPrinterStatus("Offline — waiting for connection");
+        lastStatusRef.current = { online: false, state: "offline", statusText: "Offline — waiting for connection" };
       },
     });
     sseCloserRef.current = closer;
@@ -118,24 +144,25 @@ export default function MonitorPage({
         setPrinterOnline(false);
         setPrintState("offline");
         setPrinterStatus("Offline — waiting for connection");
+        lastStatusRef.current = { online: false, state: "offline", statusText: "Offline — waiting for connection" };
       }
     }, 5000);
     return () => clearInterval(t);
   }, []);
 
-  // ---- Poll: /printers/:id/octoprint/job → เวลาที่เหลือ/ไฟล์ ฯลฯ ----
-  // ใช้รุ่น Safe (มี cooldown 60s เมื่อเจอ 502)
+  // ---- Poll: /printers/:id/octoprint/job ----
+  const lastJobRef = useRef(null);
+
   useEffect(() => {
     let stop = false;
     let timer = null;
 
     const chooseIntervalMs = () => {
-      // เร็วตอนกำลังพิมพ์, ช้าลงตอนว่าง/ออฟไลน์ เพื่อลดโหลด
       if (document.visibilityState === "hidden") return 20000;
       if (printState === "printing") return 3000;
       if (printState === "paused") return 5000;
       if (printState === "ready") return 8000;
-      return 10000; // offline/error/idle
+      return 10000;
     };
 
     const scheduleNext = () => {
@@ -145,39 +172,41 @@ export default function MonitorPage({
     };
 
     const tick = async () => {
-      if (stop) return;
-
-      // ประหยัดโหลดเมื่อแท็บถูกซ่อน: ข้ามบางรอบ (คง state ล่าสุดไว้)
-      if (document.visibilityState === "hidden") {
+      if (stop || document.visibilityState === "hidden") {
         scheduleNext();
         return;
       }
-
       try {
-        // ใช้ octoprintJobSafe ซึ่งจะทำ backoff + ตั้ง cooldown ให้เองเมื่อเจอ 502
         const data = await api.printer.octoprintJobSafe(printerId, { timeoutMs: 12000 });
         if (!mountedRef.current) return;
-        if (!data) { // อยู่ช่วง cooldown → ยังไม่อัปเดตอะไร ปล่อยให้รอบหน้า
-          scheduleNext();
-          return;
-        }
+        if (!data) { scheduleNext(); return; }
 
-        // payload: { octoprint: { job, progress }, ... }
         const job = data?.octoprint?.job || {};
         const progress = data?.octoprint?.progress || {};
         const stateText = String(data?.octoprint?.state || "");
         const mapped = normalizeState(stateText);
-        setPrintState(mapped);
-        setPrinterOnline(true);
-        setPrinterStatus(
+
+        // update mapping/online/status (เฉพาะเมื่อเปลี่ยน)
+        if (lastStatusRef.current.state !== mapped) {
+          setPrintState(mapped);
+          lastStatusRef.current.state = mapped;
+        }
+        if (lastStatusRef.current.online !== true) {
+          setPrinterOnline(true);
+          lastStatusRef.current.online = true;
+        }
+        const mappedText =
           mapped === "paused"   ? "Paused" :
           mapped === "printing" ? "Printing..." :
           mapped === "ready"    ? "Printer is ready" :
-        "Offline — waiting for connection"
-        );
+          "Offline — waiting for connection";
+        if (lastStatusRef.current.statusText !== mappedText) {
+          setPrinterStatus(mappedText);
+          lastStatusRef.current.statusText = mappedText;
+        }
+
         const fileName = job?.file?.name || null;
 
-        // เดา material จาก OctoPrint (ถ้า plugin/โครงสร้างรองรับ)
         const materialFromOcto =
           job?.file?.material ||
           job?.material ||
@@ -185,66 +214,66 @@ export default function MonitorPage({
           job?.filament?.tool1?.material ||
           null;
         if (materialFromOcto) {
-          setMaterial(String(materialFromOcto).toUpperCase());
+          const up = String(materialFromOcto).toUpperCase();
+          if (material !== up) setMaterial(up);
         }
 
-        const printTime = Number(progress?.printTime ?? 0);         // วินาทีที่พิมพ์ไปแล้ว
-        const printTimeLeft = Number(progress?.printTimeLeft ?? 0); // วินาทีที่เหลือ
-        const completion = Number(progress?.completion ?? 0);       // %
+        const printTime = Number(progress?.printTime ?? 0);
+        const printTimeLeft = Number(progress?.printTimeLeft ?? 0);
+        const completion = Number(progress?.completion ?? 0);
 
         const estimatedFromProgress =
           printTime > 0 && printTimeLeft > 0 ? printTime + printTimeLeft : 0;
         const estimatedTotal =
           estimatedFromProgress || Number(job?.estimatedPrintTime ?? 0) || 0;
 
-        setEstimatedSeconds(estimatedTotal || 0);
-        setRemainingSeconds(
+        if (estimatedTotal !== estimatedSeconds) setEstimatedSeconds(estimatedTotal || 0);
+
+        const nextRemain =
           printTimeLeft > 0
             ? printTimeLeft
             : estimatedTotal > 0
             ? Math.max(0, estimatedTotal - printTime)
-            : null
-        );
-        setStartedAt(
+            : null;
+        if (nextRemain !== remainingSeconds) setRemainingSeconds(nextRemain);
+
+        const nextStarted =
           printTime > 0
             ? new Date(Date.now() - printTime * 1000).toISOString()
-            : null
-        );
+            : null;
+        if (nextStarted !== startedAt) setStartedAt(nextStarted);
 
-        // ✅ ใช้รูป fallback เสมอเมื่อไม่รู้ URL ภาพ
-        setCurrentJob({
+        const nextJob = {
           name: fileName || "File Name",
           thumb: NO_IMAGE_URL,
           durationMin: estimatedTotal ? Math.round(estimatedTotal / 60) : undefined,
           startedAt: printTime > 0 ? new Date(Date.now() - printTime * 1000).toISOString() : undefined,
           completion,
-        });
-
-        // ถ้ามี queue number ที่ backend อื่นส่งมา สามารถเซ็ตได้ที่นี่:
-        // setCurrentQueueNumber(...)
-      } catch (e) {
-        // เงียบไว้ (safe variant จะตั้ง cooldown เองหากเป็น 502)
+        };
+        if (!shallowEq(lastJobRef.current || {}, nextJob)) {
+          setCurrentJob(nextJob);
+          lastJobRef.current = nextJob;
+        }
+        // setCurrentQueueNumber(..) // หากมีจาก BE อื่น
+      } catch {
+        /* silent */
       } finally {
         scheduleNext();
       }
     };
 
-    // เริ่มทำงาน
     tick();
-
-    // เมื่อ component ถูกถอด → ยกเลิกรอบถัดไป
     return () => {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [api, printerId, printState]);
+  }, [api, printerId, printState, NO_IMAGE_URL, estimatedSeconds, remainingSeconds, startedAt, material]);
 
-  // ---- Fallback: ถ้า OctoPrint ไม่ส่งเวลา ให้ใช้ข้อมูลจาก BE current-job ----
+  // ---- Fallback current-job ----
   useEffect(() => {
     let aborted = false;
 
     async function runFallback() {
-      // เงื่อนไขใช้ fallback เฉพาะตอนกำลังพิมพ์ และไม่มีเวลาที่เชื่อถือได้
       const noEstimate = !(estimatedSeconds > 0);
       const noStart = !startedAt;
       if (printState !== "printing" || (!noEstimate && !noStart)) return;
@@ -253,24 +282,27 @@ export default function MonitorPage({
         const cj = await api.queue.current(printerId, { timeout: 8000 });
         if (aborted || !mountedRef.current) return;
 
-        // cj: { queue_number, file_name, thumbnail_url, job_id, status, started_at, time_min, remaining_min, material?, template? }
         const tm = Number(cj?.time_min ?? cj?.timeMin ?? 0);
         const stIso = cj?.started_at ?? cj?.startedAt ?? null;
         const remMin = cj?.remaining_min ?? cj?.remainingMin ?? null;
 
-        // เก็บ material จาก current job (ลองหลายฟิลด์)
         const mat =
           cj?.material ||
           cj?.template?.material ||
           cj?.manifest?.material ||
           (Array.isArray(cj?.filaments) && cj.filaments[0]?.material) ||
           null;
-        if (mat) setMaterial(String(mat).toUpperCase());
+        if (mat) {
+          const up = String(mat).toUpperCase();
+          if (material !== up) setMaterial(up);
+        }
 
         if (tm > 0 && noEstimate) setEstimatedSeconds(tm * 60);
-        if (stIso && noStart) setStartedAt(typeof stIso === "number" ? new Date(stIso).toISOString() : stIso);
+        if (stIso && noStart) {
+          const next = typeof stIso === "number" ? new Date(stIso).toISOString() : stIso;
+          setStartedAt(next);
+        }
 
-        // คำนวณ remainingSeconds จากข้อมูล BE โดยตรง
         if (remMin != null) {
           setRemainingSeconds(Math.max(0, Math.round(remMin * 60)));
         } else if (tm > 0 && stIso) {
@@ -278,26 +310,31 @@ export default function MonitorPage({
           setRemainingSeconds(Math.max(0, tm * 60 - elapsed));
         }
 
-        // ตั้งชื่อ/รูป และ queue number
-        setCurrentJob((prev) => ({
-          name: cj?.file_name || prev?.name || "File Name",
-          // ✅ ถ้า BE ไม่มี thumbnail_url → ใช้รูป fallback
-          thumb: cj?.thumbnail_url || prev?.thumb || NO_IMAGE_URL,
-          durationMin: tm || prev?.durationMin,
-          startedAt: stIso || prev?.startedAt,
-          completion: prev?.completion, // ไม่มี % จาก BE ก็รักษาค่าเดิมไว้
-        }));
-        if (cj?.queue_number != null) setCurrentQueueNumber(String(cj.queue_number).padStart(3, "0"));
+        const nextJob = {
+          name: cj?.file_name || lastJobRef.current?.name || "File Name",
+          thumb: cj?.thumbnail_url || lastJobRef.current?.thumb || NO_IMAGE_URL,
+          durationMin: tm || lastJobRef.current?.durationMin,
+          startedAt: stIso || lastJobRef.current?.startedAt,
+          completion: lastJobRef.current?.completion,
+        };
+        if (!shallowEq(lastJobRef.current || {}, nextJob)) {
+          setCurrentJob(nextJob);
+          lastJobRef.current = nextJob;
+        }
+        if (cj?.queue_number != null) {
+          const qn = String(cj.queue_number).padStart(3, "0");
+          if (qn !== currentQueueNumber) setCurrentQueueNumber(qn);
+        }
       } catch {
-        // เงียบไว้
+        /* silent */
       }
     }
 
     runFallback();
     return () => { aborted = true; };
-  }, [api, printerId, printState, estimatedSeconds, startedAt]);
+  }, [api, printerId, printState, estimatedSeconds, startedAt, NO_IMAGE_URL, currentQueueNumber, material]);
 
-  // ---- จัดรูป remainingTime เป็นข้อความ แสดงใน RightPanel ----
+  // ---- remaining text ----
   const remainingText = useMemo(() => {
     if (remainingSeconds == null) return "-";
     const sec = Math.max(0, Math.round(remainingSeconds));
@@ -315,16 +352,18 @@ export default function MonitorPage({
           <VideoStream
             estimatedSeconds={estimatedSeconds}
             startedAt={startedAt}
-            state={printState}           // printing | paused | ready | error | offline | idle
-            job={currentJob}             // { name, thumb, durationMin?, startedAt?, completion? }
+            state={printState}
+            job={currentJob}
             queueNumber={currentQueueNumber}
+            /* ↓ ลดการกระพริบของ snapshot โดยคุม FPS ที่นี่ */
+            targetFps={8}
+            minFpsHidden={2}
+            objectFit="contain"
           />
         </div>
       </div>
 
       <div className="right-col">
-        {/* ส่ง printerId เพื่อให้ปุ่มใน RightPanel เรียก OctoPrint ได้จริง */}
-        {/* ส่ง remainingTime + material ไปแสดงในแผงขวา */}
         <RightPanel
           printerId={printerId}
           remainingTime={remainingText}

@@ -531,7 +531,7 @@ export default function RightPanel({
           <button
             ref={matAnchorRef}
             className="mat-circle"
-            onClick={() => setMatOpen(v => !v)}
+            onClick={() => setMatOpen((v) => !v)}
             aria-haspopup="dialog"
             aria-expanded={matOpen}
             style={{
@@ -564,14 +564,7 @@ export default function RightPanel({
                     key={t}
                     className={`mat-type ${t === matType ? "is-active" : ""}`}
                     aria-pressed={t === matType}
-                    onClick={() => {
-                      setMatType(t);
-                      try {
-                        localStorage.setItem("mat_type", t);
-                      } catch {}
-                      setMatOpen(false);
-                      matAnchorRef.current?.focus();
-                    }}
+                    onClick={() => pickType(t)}
                   >
                     {t}
                   </button>
@@ -580,7 +573,8 @@ export default function RightPanel({
 
               <div className="mat-divider" />
 
-              <div className="mat-grid" role="listbox" aria-label="Material color">
+              {/* เปลี่ยน role เป็น group และใช้ aria-pressed บนปุ่มแทน aria-selected */}
+              <div className="mat-grid" role="group" aria-label="Material color">
                 {MATERIAL_SWATCHES.map((s) => {
                   const selected =
                     (matColor || "").toLowerCase() === s.hex.toLowerCase();
@@ -589,18 +583,9 @@ export default function RightPanel({
                       key={s.hex}
                       title={s.name}
                       className={`mat-swatch ${selected ? "is-selected" : ""}`}
-                      aria-selected={selected}
+                      aria-pressed={selected}
                       style={{ background: s.hex }}
-                      onClick={() => {
-                        setMatColor(s.hex);
-                        setMatText(s.text || "#111");
-                        try {
-                          localStorage.setItem("mat_color", s.hex);
-                          localStorage.setItem("mat_text", s.text || "#111");
-                        } catch {}
-                        setMatOpen(false);
-                        matAnchorRef.current?.focus();
-                      }}
+                      onClick={() => pickColor(s.hex, s.text)}
                     />
                   );
                 })}

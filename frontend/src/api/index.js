@@ -37,6 +37,9 @@ const toQ = (v) => {
   return String(v);
 };
 
+/** แปลง millisecond → Promise ที่หน่วงเวลา (ย้ายออกนอกลูปเพื่อเลี่ยง no-loop-func) */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** สร้าง URL อย่างปลอดภัย พร้อมรวม query เดิมกับ query ใหม่ */
 function buildUrl(path, query) {
   const rel = ABS_HTTP.test(path) ? path : (path.startsWith("/") ? path : `/${path}`);
@@ -171,7 +174,8 @@ async function fetchWithRetry(
       return await doFetch();
     } catch (e) {
       if (attempt >= retries || !shouldRetry(e)) throw e;
-      await new Promise((r) => setTimeout(r, delay));
+      // ใช้ sleep() ที่ประกาศนอกลูป เพื่อเลี่ยง no-loop-func
+      await sleep(delay);
       delay = Math.min(delay * 2, maxBackoffMs);
       attempt += 1;
     }
@@ -655,10 +659,9 @@ export function makeApi({ token, onUnauthorized, requestCoreFn } = {}) {
   function wsUrl(path = "/ws") {
     const httpBase =
       (RUNTIME_API_BASE ||
-        (typeof window !== "undefined" ? window.location.origin : "http://localhost")).replace(
-        /\/+$/,
-        ""
-      ) + "/";
+        (typeof window !== "undefined" ? window.location.origin : "http://localhost"))
+        .replace(/\/+$/, "") + "/"; // ✅ FIX ตำแหน่งนี้
+
     const u = new URL(path, httpBase);
     const tok = token || "";
     if (tok) u.searchParams.set("token", tok);
