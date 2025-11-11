@@ -19,7 +19,7 @@ except Exception:
 
 import boto3
 from botocore.client import Config as BotoConfig
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError, ResponseStreamingError
 
 log = logging.getLogger(__name__)
 
@@ -429,8 +429,43 @@ def put_object(
         cache_control=cache_control,
     )
 
-# ==== Streaming ====
+# ==== Streaming helpers (ทนต่อการหลุดกลางคัน) ====
+def stream_s3_body(body, chunk_size: int = 256 * 1024) -> Iterable[bytes]:
+    """
+    ใช้กับ FastAPI StreamingResponse ได้โดยตรง
+    - ไม่ประกาศ Content-Length
+    - ทน ResponseStreamingError/connection reset
+    """
+    try:
+        if hasattr(body, "iter_chunks"):
+            for chunk in body.iter_chunks(chunk_size=chunk_size):
+                if chunk:
+                    yield chunk
+        else:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    except ResponseStreamingError:
+        # ผู้ใช้ยกเลิกดาวน์โหลด/แท็บปิดกลางคัน ไม่ต้อง throw
+        return
+    except Exception:
+        # กันไม่ให้แอพล้มจาก error เครือข่ายอื่น ๆ
+        return
+    finally:
+        try:
+            body.close()
+        except Exception:
+            pass
+
+# ==== Streaming (legacy) ====
 def open_object_stream(object_key: str) -> Tuple[Iterable[bytes], Optional[int], Optional[str]]:
+    """
+    Legacy helper: คืน iterator, size, content-type
+    หมายเหตุ: ถ้าเอาไปตอบ HTTP อย่าตั้ง Content-Length จาก size เพื่อหลีกเลี่ยง
+    CONTENT_LENGTH_MISMATCH — ควรใช้ StreamingResponse แบบไม่ระบุความยาว
+    """
     _validate_key(object_key)
     try:
         stat = _s3.head_object(Bucket=S3_BUCKET, Key=object_key)
@@ -450,25 +485,13 @@ def open_object_stream(object_key: str) -> Tuple[Iterable[bytes], Optional[int],
         raise
 
     def _iter() -> Iterable[bytes]:
-        try:
-            if hasattr(body, "iter_chunks"):
-                for chunk in body.iter_chunks(chunk_size=256 * 1024):
-                    if chunk:
-                        yield chunk
-            else:
-                while True:
-                    chunk = body.read(256 * 1024)
-                    if not chunk:
-                        break
-                    yield chunk
-        finally:
-            try:
-                body.close()
-            except Exception:
-                pass
+        # ใช้ตัวอ่านที่ทน error
+        for chunk in stream_s3_body(body):
+            yield chunk
 
     size = stat.get("ContentLength")
     ct = (stat.get("ContentType") or None) or _guess_content_type(object_key)
+    # คืน size ไว้เพื่อความเข้ากันได้ แต่แนะนำ **อย่า** ใช้ไปตั้ง Content-Length
     return _iter(), int(size) if size is not None else None, ct
 
 # ==== Partial object reader ====

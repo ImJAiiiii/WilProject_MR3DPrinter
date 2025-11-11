@@ -10,7 +10,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse, FileResponse, Response
 
-# ✅ สำคัญ: dependency นี้จะตรวจ token ได้ทั้งจาก Header และ query (?token=)
+# ✅ ตรวจ token ได้ทั้ง Header และ query (?token=)
 from auth import get_user_from_header_or_query
 
 # ---------------- Boot mimetypes ----------------
@@ -42,7 +42,7 @@ def _norm_object_key(k: Optional[str]) -> str:
         k = k.replace("//", "/")
     return k
 
-# เมื่อ backend เป็น S3/MinIO เราจะใช้ s3util (ของโปรเจกต์เดิม)
+# เมื่อ backend เป็น S3/MinIO จะใช้ s3util (ของโปรเจกต์)
 if STORAGE_BACKEND == "local":
     def _local_path_from_key(object_key: str) -> Path:
         # ปรับให้รับคีย์ที่มี / นำหน้า แล้วค่อย validate
@@ -70,7 +70,7 @@ if STORAGE_BACKEND == "local":
         return p
 else:
     # s3/minio helpers
-    from s3util import open_object_stream, head_object, get_object_range
+    from s3util import open_object_stream, head_object, get_object_range, stream_s3_body
 
 
 # ---------------- Helpers ----------------
@@ -201,7 +201,7 @@ def files_raw(
         if rng_hdr and not rng:
             return _invalid_range_response(file_size)
 
-        # ทั้งไฟล์
+        # ทั้งไฟล์ (local ใช้ FileResponse ได้)
         return FileResponse(
             str(p),
             media_type=ct,
@@ -226,8 +226,8 @@ def files_raw(
     rng_hdr = request.headers.get("range")
     rng = _parse_range(rng_hdr, size)
     if rng:
+        # ---- Partial content (206) → ใส่ Content-Length ของ “ช่วง” ได้ปลอดภัย ----
         start, end = rng
-        # อ่านเฉพาะช่วงที่ขอ
         data = get_object_range(object_key, start=start, length=end - start + 1)
         headers = {
             "Content-Type": ct,
@@ -243,18 +243,20 @@ def files_raw(
         # ส่งมาเป็น Range แต่ parse ไม่ได้ → 416
         return _invalid_range_response(size)
 
-    # ทั้งไฟล์ (streaming)
+    # ---- ทั้งไฟล์ (stream) จาก S3: *ห้าม* ใส่ Content-Length เพื่อกัน mismatch ----
     try:
-        iterator, full_size, ct_full = open_object_stream(object_key)
+        iterator, _full_size, ct_full = open_object_stream(object_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Object not found")
 
-    headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-store"}
-    if full_size is not None:
-        headers["Content-Length"] = str(full_size)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+    }
     if etag:
         headers["ETag"] = str(etag)
 
+    # iterator จาก open_object_stream() ใช้ stream_s3_body ภายใน (ทน connection reset)
     return StreamingResponse(iterator, media_type=ct_full or ct, headers=headers)
 
 
@@ -318,7 +320,6 @@ def files_download(
             raise HTTPException(status_code=404, detail="File not found")
         ct = _guess_ct(p.name)
         disp_name = filename or p.name
-        # สำหรับ local ให้ browser stream ได้เช่นกัน
         return FileResponse(
             str(p),
             media_type=ct,
@@ -330,7 +331,6 @@ def files_download(
         )
 
     # -------- S3/MINIO --------
-    # ใช้เหมือน /raw แต่เติม Content-Disposition
     try:
         h = head_object(object_key)
         size = int(h.get("ContentLength") or 0)
@@ -361,9 +361,9 @@ def files_download(
     elif rng_hdr:
         return _invalid_range_response(size)
 
-    # ทั้งไฟล์ (stream)
+    # ทั้งไฟล์ (stream) — **ไม่ใส่ Content-Length**
     try:
-        iterator, full_size, ct_full = open_object_stream(object_key)
+        iterator, _full_size, ct_full = open_object_stream(object_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Object not found")
 
@@ -372,8 +372,6 @@ def files_download(
         "Content-Disposition": disp,
         "Cache-Control": "private, max-age=0, no-cache",
     }
-    if full_size is not None:
-        headers["Content-Length"] = str(full_size)
     if etag:
         headers["ETag"] = str(etag)
 
