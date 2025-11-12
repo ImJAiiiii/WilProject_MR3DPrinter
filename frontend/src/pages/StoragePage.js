@@ -33,7 +33,7 @@ function looksLikeFilename(s = "") {
   return false;
 }
 
-/* ✅ เพิ่ม OTHER เข้าไปในลิสต์ฟิลเตอร์ */
+/* ✅ Filters (ยังคงเหมือนเดิม) */
 const FILTERS = ["ALL", "DELTA", "HONTECH", "OTHER"];
 
 /* ---------- preview helpers (PNG from MinIO) ---------- */
@@ -55,8 +55,6 @@ function toRawUrl(apiBase, objectKey, token) {
   const path = `/api/files/raw?object_key=${encodeURIComponent(objectKey)}`;
   return withToken(joinUrl(apiBase, path), token);
 }
-
-// คืน candidate สองแบบ: .preview.png มาก่อน แล้วค่อย _preview.png
 function derivePreviewCandidatesFromGcodeKey(k) {
   if (!k) return [];
   const i = k.lastIndexOf(".");
@@ -65,23 +63,19 @@ function derivePreviewCandidatesFromGcodeKey(k) {
   const b = `${base}_preview.png`;
   return a === b ? [a] : [a, b];
 }
-
-// สร้าง URL สำหรับ preview จาก key/metadata (รวม cache bust + token)
 function buildPreviewPair({ apiBase, token, key, cacheTag }) {
   if (!key) return { src: "", alt: "" };
   const [c1, c2] = derivePreviewCandidatesFromGcodeKey(key);
   const t = cacheTag || Date.now();
-  const mk = (k) => k ? `${toRawUrl(apiBase, k, token)}&t=${encodeURIComponent(t)}` : "";
+  const mk = (k) => (k ? `${toRawUrl(apiBase, k, token)}&t=${encodeURIComponent(t)}` : "");
   return { src: mk(c1), alt: mk(c2) };
 }
-
-// onError: ถ้ามี data-alt-src → สลับไปอันนั้นก่อน, ไม่งั้นค่อย fallback icon
 function makeOnImgError(fallbackSrc) {
   return (e) => {
     const el = e.currentTarget;
     const alt = el.dataset.altSrc;
     if (alt) {
-      el.onerror = null;        // กันลูป
+      el.onerror = null;
       el.removeAttribute("data-alt-src");
       el.src = alt;
       return;
@@ -125,7 +119,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     setLoading(true);
     setServerItems(null);
     try {
-      /* ✅ map ค่า filter ฝั่ง UI -> ชื่อ model ที่ BE ใช้ */
       const toApiModel = (x) =>
         x === "DELTA"   ? "Delta"   :
         x === "HONTECH" ? "Hontech" :
@@ -140,7 +133,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
           offset: 0,
           limit: 2000,
           with_urls: 1,
-          with_head: 1
+          with_head: 1,
         },
         { timeoutMs: 20000 }
       );
@@ -163,7 +156,8 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   /* ---------- adaptors ---------- */
   const adaptFromServer = useCallback((raw) => {
     const name = raw?.display_name || raw?.name || raw?.filename || "";
-    const ext = (raw?.ext) || getExt(raw?.filename || name);
+    // ⛑️ เดา ext จาก object_key เป็น fallback กันกรองตกหล่น
+    const ext = (raw?.ext) || getExt(raw?.filename || name) || getExt(raw?.object_key || "");
     const isGcode = isGcodeExt(ext);
     const ts = parseTs(raw?.uploaded_at);
 
@@ -236,83 +230,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     };
   }, [api, token]);
 
-  const adaptFromProp = useCallback((raw) => {
-    const name = raw?.name ?? raw?.filename ?? "";
-    const ext = getExt(name);
-    const ts = parseTs(raw?.uploaded_at ?? raw?.uploadedAt);
-
-    const up = raw?.uploader || raw?._raw?.uploader || {};
-    let uploaderName = (up && (up.name || up.employee_id)) || null;
-    if (uploaderName && (uploaderName.toLowerCase() === name.toLowerCase() || looksLikeFilename(uploaderName))) {
-      uploaderName = null;
-    }
-    const uploaderEmp = (up && up.employee_id) || raw?.employee_id || raw?._raw?.employee_id || null;
-
-    const objectKey = raw?.object_key ?? raw?._raw?.object_key ?? null;
-    const isG = isGcodeExt(ext);
-
-    let thumbUrl = raw?.thumb || raw?.template?.preview || null;
-    let thumbAlt = "";
-
-    if (!thumbUrl) {
-      const { src, alt } = buildPreviewPair({
-        apiBase: api.API_BASE,
-        token,
-        key: isG ? (raw?.gcode_key || objectKey) : objectKey,
-        cacheTag: raw?.updated_at || raw?.uploaded_at
-      });
-      thumbUrl = src || "/icon/file.png";
-      thumbAlt = alt || "";
-    } else if (!/^https?:\/\//i.test(thumbUrl) && typeof thumbUrl === "string") {
-      thumbUrl = toRawUrl(api.API_BASE, thumbUrl, token);
-    }
-
-    const out = {
-      id: raw?.id ?? raw?.fileId ?? name,
-      name,
-      ext,
-      isGcode: isG,
-      uploadedTs: ts,
-      uploadedAt: fmtLocal(ts),
-      sizeText: typeof raw?.size === "number" ? `${(raw.size / (1024 * 1024)).toFixed(1)} MB` : raw?.size_text || null,
-      thumb: thumbUrl || "/icon/file.png",
-      thumbAlt,
-      _raw: raw,
-      storageId: raw?.id ?? null,
-      object_key: objectKey,
-      downloadUrl: raw?.url ?? null,
-      template: raw?.template ?? null,
-      stats: raw?.stats ?? null,
-      uploader: uploaderName,
-      uploaderEmployeeId: uploaderEmp
-    };
-
-    if (out.isGcode && out.object_key) out.gcode_key = raw?.gcode_key || out.object_key;
-    else if (out.object_key) out.original_key = out.object_key;
-
-    return out;
-  }, [api, token]);
-
   /* ---------- merge ---------- */
+  // ❗ ใช้เฉพาะรายการที่มาจาก server (catalog) เท่านั้น
   const merged = useMemo(() => {
-    const A = (serverItems || []).map(adaptFromServer);
-
-    const usePropItems = serverItems !== null;
-    const serverKeys = new Set(A.map(x => x.object_key).filter(Boolean));
-    const B0 = usePropItems ? (items || []).map(adaptFromProp) : [];
-    const B = usePropItems ? B0.filter(x => !x.object_key || serverKeys.has(x.object_key)) : [];
-
-    const byKey = new Map();
-    const put = (x, isServer) => {
-      const key = x.object_key || x.id || x.name || Math.random().toString(36).slice(2);
-      if (!byKey.has(key)) byKey.set(key, x);
-      else if (isServer) byKey.set(key, { ...byKey.get(key), ...x });
-    };
-    A.forEach(x => put(x, true));
-    B.forEach(x => put(x, false));
-
-    return Array.from(byKey.values()).sort((a, b) => (b.uploadedTs || 0) - (a.uploadedTs || 0));
-  }, [serverItems, items, adaptFromServer, adaptFromProp]);
+    return (serverItems || []).map(adaptFromServer);
+  }, [serverItems, adaptFromServer]);
 
   /* ---------- client-side search ---------- */
   const files = useMemo(() => {
@@ -325,14 +247,16 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     );
   }, [q, dq, merged]);
 
-  /* ---------- show only G-code ---------- */
+  /* ---------- show only G-code (and only catalog/*) ---------- */
   const gcodeFiles = useMemo(() => {
     const isCtGcode = (ct = "") =>
       /(?:^|\/)(?:text|application)\/x?-?gcode$/i.test(String(ct).trim());
+    const hasValidKey = (k = "") => /^(catalog)\//.test(String(k));
     return (files || []).filter((f) => {
-      if (f?.isGcode) return true;                           // จากนามสกุล
+      if (!hasValidKey(f?.object_key)) return false;
+      if (f?.isGcode) return true;
       const ct = f?._raw?.content_type || f?._raw?.contentType || "";
-      return isCtGcode(ct);                                   // กันพลาดโดยดู content_type
+      return isCtGcode(ct);
     });
   }, [files]);
 
@@ -362,7 +286,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     }
   };
 
-  // helper: ลบออกจาก list ฝั่ง FE แบบ optimistic
   const removeFromList = useCallback((objKeyOrId) => {
     setServerItems((prev) => {
       if (!Array.isArray(prev)) return prev;
@@ -383,22 +306,18 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     const keyForState = f.object_key || f.id || f.name;
 
     setDeletingKey(keyForState);
-    // optimistic remove (ให้การ์ดหายทันที)
     removeFromList(f.object_key);
 
     try {
-      // 1) ยิง hard delete ก่อนเสมอ
       await api.del(
         "/api/storage/object-hard",
         { object_key: f.object_key },
         { timeoutMs: 18000 }
       );
-      // 2) เผื่อ client-side state ยังมีซากจาก props → ขอรีเฟรชจาก server อีกรอบ
       await fetchServer();
     } catch (error) {
       console.error("hard delete failed:", error);
       const msg = String(error?.message || error || "Delete failed");
-      // กรณีไฟล์ถูกใช้ในงานที่ active
       if (/409|file_in_use_by_active_jobs/i.test(msg)) {
         alert("This file is currently used by an active print job.\nPlease cancel/finish that job, then try again.");
       } else if (/403/.test(msg)) {
@@ -407,7 +326,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         alert(msg);
       }
 
-      // Fallback ทางเดิม (ลบหลักอย่างเดียว) เพื่อความเข้ากันได้ย้อนหลัง
+      // Fallback compatibility (เผื่อรุ่นเก่า)
       try {
         if (f.storageId != null && api.storage?.deleteById) {
           await api.storage.deleteById(
@@ -431,10 +350,8 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         }
       } catch (fallbackErr) {
         console.warn("fallback delete also failed:", fallbackErr);
-        // ให้ FE แจ้ง parent ถ้ามี
         if (onDeleteItem) onDeleteItem(f.id);
       } finally {
-        // รีเฟรชให้สถานะตรงกับจริง
         await fetchServer();
       }
     } finally {

@@ -8,6 +8,8 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
+from slicer_core import slice_stl_to_gcode
+
 from auth import get_confirmed_user
 from models import User
 from s3util import (
@@ -17,7 +19,7 @@ from s3util import (
 
 log = logging.getLogger("slicer")
 
-# ===== Renderers =====
+# ===== Renderers (optional) =====
 try:
     from preview_gcode_image import gcode_to_preview_png as _gcode_to_png  # type: ignore
     _HAS_RENDER_NEW = True
@@ -33,9 +35,11 @@ except Exception:
 router = APIRouter(prefix="/api/slicer", tags=["slicer"])
 
 # ==== ENV / CONFIG ============================================================
-PRUSA_SLICER_BIN = os.getenv("PRUSA_SLICER_BIN") or os.getenv(
-    "PRUSASLICER_EXE",
-    r"C:\Program Files\Prusa3D\PrusaSlicer\prusa-slicer-console.exe",
+PRUSA_SLICER_BIN = (
+    os.getenv("PRUSA_SLICER_BIN")
+    or os.getenv("PRUSA_SLICER_CLI")
+    or os.getenv("PRUSASLICER_EXE")
+    or r"C:\Program Files\Prusa3D\PrusaSlicer\prusa-slicer-console.exe"
 )
 PRUSA_DATADIR = os.getenv("PRUSA_DATADIR") or os.getenv(
     "PRUSASLICER_DATADIR",
@@ -53,6 +57,7 @@ PRUSA_STRICT_PRESET    = os.getenv("PRUSA_STRICT_PRESET", "1").lower() not in ("
 PRUSA_DEBUG_CLI        = os.getenv("PRUSA_DEBUG_CLI", "1").lower() not in ("0","false","no")
 
 DELETE_STAGING_AFTER_SLICE = os.getenv("DELETE_STAGING_AFTER_SLICE", "1").lower() not in ("0","false","no")
+MIN_VALID_GCODE_BYTES      = int(os.getenv("MIN_VALID_GCODE_BYTES", "50"))
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -60,14 +65,14 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # === Preview options ===
 GEN_PREVIEW   = os.getenv("SLICER_GEN_PREVIEW", "1").lower() not in ("0","false","no")
 PREVIEW_SIZE  = os.getenv("SLICER_PREVIEW_SIZE", "3200x2400")
-PREVIEW_HIDE  = os.getenv("SLICER_PREVIEW_HIDE", "")
 PREVIEW_AZ    = float(os.getenv("SLICER_PREVIEW_AZ", "45"))
 PREVIEW_EL    = float(os.getenv("SLICER_PREVIEW_EL", "35.2643897"))
-PREVIEW_BED   = os.getenv("SLICER_PREVIEW_BED", "220x220")
+PREVIEW_BED   = os.getenv("SLICER_PREVIEW_BED", "250x220")
 
+# ✅ ใช้ map จาก .env ที่คุณมีอยู่แล้ว (PLA/PETG)
 FILAMENT_PRESET_MAP = {
-    "PLA":  os.getenv("FILAMENT_PROFILE_PLA",  "Generic PLA @COREONE HF0.4 - Copy").strip(),
-    "PETG": os.getenv("FILAMENT_PROFILE_PETG", "Generic PETG @COREONE HF0.4 - Copy").strip(),
+    "PLA":  os.getenv("FILAMENT_PROFILE_PLA",  "").strip(),
+    "PETG": os.getenv("FILAMENT_PROFILE_PETG", "").strip(),
 }
 
 # ==== Schemas =================================================================
@@ -111,7 +116,6 @@ class SliceOut(BaseModel):
 TIME_ANY  = re.compile(r';\s*estimated printing time(?:s)?(?:\s*\((normal|silent)\s*mode\))?\s*[:=]\s*([^\r\n]+)', re.I)
 TIME_SEC  = re.compile(r'^;\s*TIME:\s*(\d+)\s*$', re.I | re.M)
 USED_FIL_COMBO = re.compile(r';\s*Used filament\s*:\s*([0-9.]+)\s*m\s*,\s*([0-9.]+)\s*g', re.I)
-FIL_G_ANY = re.compile(r';\s*(?:total\s+filament\s+used|filament\s+used|used filament|estimated_filament_weight)\s*[:=]\s*([0-9.]+)', re.I)
 FIRST_TIME = re.compile(r';\s*(?:estimated first layer printing time|first_layer_print_time|first\s*layer\s*time)\s*[:=]\s*([^\r\n]+)', re.I)
 FIRST_HEIGHT = re.compile(r';\s*(?:first_layer_height|first\s*layer\s*height)\s*[:=]\s*([^\r\n]+)', re.I)
 AP_FILL   = re.compile(r';\s*fill_density\s*=\s*([0-9.]+%?)', re.I)
@@ -205,12 +209,12 @@ def _dpi_from_size(s: str, default=320) -> int:
 
 def _parse_bed(s: str) -> tuple[float, float]:
     try:
-        a, b = (s or "220x220").lower().split("x", 1)
+        a, b = (s or "250x220").lower().split("x", 1)
         return float(a), float(b)
     except Exception:
-        return 220.0, 220.0
+        return 250.0, 220.0
 
-# === Preview-only G-code filtering (ไม่แตะไฟล์จริง) =========================
+# === Preview-only filtering ====================================================
 _TYPE_CANON = {
     "WALL-OUTER": "Perimeter", "WALL OUTER": "Perimeter",
     "PERIMETER": "Perimeter", "EXTERNAL PERIMETER": "External perimeter",
@@ -221,17 +225,11 @@ _TYPE_CANON = {
     "SKIRT/BRIM": "Skirt/Brim", "SKIRT": "Skirt", "BRIM": "Brim",
     "SUPPORT": "Support material", "SUPPORT MATERIAL": "Support material",
 }
-_PREVIEW_EXCLUDE_TYPES = {
-    "TRAVEL", "RETRACT", "WIPE", "PRIME", "UNKNOWN", "SUPPORT", "SUPPORT MATERIAL"
-}
-_PREVIEW_INCLUDE_CANON = {
-    "Perimeter", "External perimeter",
-    "Solid infill", "Top solid infill", "Infill",
-    "Skirt/Brim", "Skirt", "Brim",
-}
+_PREVIEW_EXCLUDE_TYPES = {"TRAVEL", "RETRACT", "WIPE", "PRIME", "UNKNOWN", "SUPPORT", "SUPPORT MATERIAL"}
+_PREVIEW_INCLUDE_CANON = {"Perimeter", "External perimeter", "Solid infill", "Top solid infill", "Infill", "Skirt/Brim", "Skirt", "Brim"}
 _TYPE_RE_ANY = re.compile(r";\s*TYPE\s*:\s*([^\r\n]+)", re.I)
 _NUM_RE = r"[-+]?(?:\d+\.?\d*|\.\d+)"
-_TOK_RE_PREV = re.compile(rf"\b([XYZEZ])\s*({_NUM_RE})")
+_TOK_RE_PREV = re.compile(rf"\b([XYZE])\s*({_NUM_RE})")
 
 def _normalize_and_filter_gcode_for_preview(src_path: str) -> str:
     out_path = _mktemp_path(".gcode")
@@ -265,8 +263,10 @@ def _normalize_and_filter_gcode_for_preview(src_path: str) -> str:
 
             coords = dict(_TOK_RE_PREV.findall(line))
             if "E" in coords:
-                try: e = float(coords["E"])
-                except Exception: continue
+                try:
+                    e = float(coords["E"])
+                except Exception:
+                    continue
                 is_extrude = (not have_e) or (e > last_e + 1e-9)
                 have_e = True
                 last_e = e
@@ -293,18 +293,9 @@ def _render_preview_bytes_from_local_gcode(local_gcode: str) -> Optional[bytes]:
                 include_travel=False,
                 fit_mode="object",
                 max_obj_fill=0.86,
-                bbox_types_for_fit=[
-                    "EXTERNAL PERIMETER","PERIMETER","WALL-OUTER","WALL-INNER","WALL"
-                ],
-                pad=0.10,
-                lw=0.70,
-                fade=1.0,
-                zscale=1.0,
-                grid=10.0,
-                dpi=dpi,
-                antialias=True,
-                azim_deg=PREVIEW_AZ,
-                elev_deg=PREVIEW_EL,
+                bbox_types_for_fit=["EXTERNAL PERIMETER","PERIMETER","WALL-OUTER","WALL-INNER","WALL"],
+                pad=0.10, lw=0.70, fade=1.0, zscale=1.0, grid=10.0,
+                dpi=dpi, antialias=True, azim_deg=PREVIEW_AZ, elev_deg=PREVIEW_EL,
                 bed_w=bw, bed_d=bd,
             )
             with open(tmp_png, "rb") as fp:
@@ -327,9 +318,7 @@ def _render_preview_bytes_from_text(gtxt: str) -> Optional[bytes]:
         return None
 
 def _placeholder_png() -> bytes:
-    return base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAnsB9d1kBx8AAAAASUVORK5CYII="
-    )
+    return base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAnsB9d1kBx8AAAAASUVORK5CYII=")
 
 def _build_manifest(job_name: str, gcode_key: str, info: dict, applied: dict | None,
                     original_key: Optional[str], origin_ext: str, presets: dict | None,
@@ -350,17 +339,23 @@ def _build_manifest(job_name: str, gcode_key: str, info: dict, applied: dict | N
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }
 
-# =============================== CLI build/run ================================
+# =============================== CLI build/run (preview raw) ===================
 def _resolve_presets_from_slicing(s: Dict[str, Any]) -> Dict[str, Optional[str]]:
     prn, prt, mat = PRUSA_PRINTER_PRESET, PRUSA_PRINT_PRESET, PRUSA_FILAMENT_PRESET
+
     if PRUSA_ALLOW_FE_PRESET:
         prn = (s.get("printer_profile")  or prn or "").strip() or prn
         prt = (s.get("print_profile")    or prt or "").strip() or prt
         mat = (s.get("material_profile") or mat or "").strip() or mat
-    key = (s.get("material") or "").strip().upper()
-    if key and key in FILAMENT_PRESET_MAP: mat = FILAMENT_PRESET_MAP[key] or mat
+
+    # ✅ ไม่แก้ .env ก็ยังได้ filament: ใช้ material จาก FE ถ้ามี, ไม่มีก็ PLA
+    material_key = (s.get("material") or "PLA").strip().upper()
+    # ถ้ายังไม่มี mat จาก preset เลย → map ตาม material_key / PLA
+    if not mat:
+        mat = FILAMENT_PRESET_MAP.get(material_key) or FILAMENT_PRESET_MAP.get("PLA") or ""
+
     if PRUSA_STRICT_PRESET and (not prn or not prt or not mat):
-        raise HTTPException(400, "Missing preset names (printer/print/material).")
+        raise HTTPException(400, "Missing preset names (printer/print/filament).")
     return {"printer": prn or None, "print": prt or None, "filament": mat or None}
 
 def _build_cli(src_local: str, out_local: str, slicing: Dict, strict: bool) -> tuple[List[str], dict]:
@@ -368,13 +363,12 @@ def _build_cli(src_local: str, out_local: str, slicing: Dict, strict: bool) -> t
     cli = [PRUSA_SLICER_BIN, "--export-gcode", "--sw-renderer"]
     if PRUSA_DATADIR: cli += ["--datadir", PRUSA_DATADIR]
     if PRUSA_BUNDLE_PATH and os.path.exists(PRUSA_BUNDLE_PATH): cli += ["--load", PRUSA_BUNDLE_PATH]
-    if presets["printer"]:  cli += ["--printer-profile",  presets["printer"]]
-    if presets["print"]:    cli += ["--print-profile",    presets["print"]]
-    if presets["filament"]: cli += ["--material-profile", presets["filament"]]
+    if presets["printer"]:  cli += ["--printer-profile",   presets["printer"]]
+    if presets["print"]:    cli += ["--print-settings",    presets["print"]]       # ✅ สวิตช์ใหม่
+    if presets["filament"]: cli += ["--filament-settings", presets["filament"]]    # ✅ สวิตช์ใหม่
     if strict and (not presets["printer"] or not presets["print"] or not presets["filament"]):
         raise HTTPException(500, "Preset names are required (STRICT mode).")
 
-    # applied overrides
     if (v:=s.get("infill")) is not None:       cli.append(f"--fill-density={_fmt_fill_density(v)}")
     if (v:=s.get("walls")) is not None:        cli.append(f"--perimeters={int(max(1,int(v)))}")
     if (v:=s.get("layer_height")) is not None: cli.append(f"--layer-height={float(v)}")
@@ -397,13 +391,14 @@ def _try_decode(b: Optional[bytes]) -> str:
 
 def _map_prusa_error_to_user_message(std_err: str, std_out: str) -> str:
     raw = (std_err or "") + "\n" + (std_out or "")
-    # เคสที่เจอบ่อย: ใช้ [] กับนิพจน์ หรืออ้างตัวแปรที่เป็นเวกเตอร์โดยไม่ระบุ [0]
     if "Failed to process the custom G-code template" in raw or "custom G-code" in raw:
         return "PrusaSlicer failed: invalid custom G-code template (check Start/End G-code)."
     if "Parsing error" in raw and "Expecting tag literal-char" in raw:
         return "PrusaSlicer failed: custom G-code uses legacy [ ... ] math. Use { ... } instead."
     if "Referencing a vector variable when scalar is expected" in raw:
         return "PrusaSlicer failed: custom G-code references vector variables; add [0] (e.g., bed_temperature[0])."
+    if "unknown preset" in raw.lower():
+        return "PrusaSlicer failed: preset not found (check names in bundle/env)."
     return (std_err.strip() or std_out.strip() or "PrusaSlicer failed").splitlines()[0]
 
 def _run_slice(src_local: str, out_local: str, slicing: Dict, strict: bool) -> dict:
@@ -412,9 +407,9 @@ def _run_slice(src_local: str, out_local: str, slicing: Dict, strict: bool) -> d
     if PRUSA_DEBUG_CLI:
         def _q(x): x=str(x); return f'"{x}"' if (" " in x or "\t" in x) else x
         log.info("[slicer] CLI => %s", " ".join(_q(c) for c in cli))
+        log.info("[slicer] presets => %s", presets_used)
 
     try:
-        # ใช้โหมด binary แล้วค่อย decode เอง → กัน UnicodeDecodeError บน Windows
         cp = subprocess.run(cli, capture_output=True, text=False, check=True)
         out_s = _try_decode(cp.stdout)
         err_s = _try_decode(cp.stderr)
@@ -424,11 +419,11 @@ def _run_slice(src_local: str, out_local: str, slicing: Dict, strict: bool) -> d
         out_s = _try_decode(e.stdout)
         err_s = _try_decode(e.stderr)
         if PRUSA_DEBUG_CLI:
-            log.info("[slicer] RC: %s", e.returncode)
+            log.error("[slicer] FAILED rc=%s", e.returncode)
             if out_s: log.info("[slicer] STDOUT => %s", out_s[:4000])
             if err_s: log.warning("[slicer] STDERR => %s", err_s[:4000])
         msg = _map_prusa_error_to_user_message(err_s, out_s)
-        raise HTTPException(500, msg)
+        raise HTTPException(status_code=500, detail=f"Slicer error: {msg}")
 
     s = slicing or {}
     return {
@@ -457,8 +452,10 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
     downloaded_tmp = None
     if (data.fileId or "").startswith(("staging/","storage/")):
         src_local = _mktemp_path(suffix=f".{origin or 'bin'}"); downloaded_tmp = src_local
-        try: download_to_file(data.fileId, src_local)
-        except Exception as e: raise HTTPException(500, f"download source failed: {e}")
+        try:
+            download_to_file(data.fileId, src_local)
+        except Exception as e:
+            raise HTTPException(500, f"download source failed: {e}")
         original_key = data.fileId
     else:
         src_local = _safe_local_path(UPLOAD_DIR, data.fileId)
@@ -469,7 +466,9 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
     job_name = _safe_base(data.jobName) or Path(src_local).stem
     paths = catalog_paths_for_job(model, job_name)
 
-    # ===== G-code =====
+    log.info("[slicer] source=%s model=%s name=%s", data.fileId, model, job_name)
+
+    # ===== G-code → แค่สกัด info + ทำพรีวิว/manifest แล้ว commit =====
     if origin == "gcode":
         try: gtxt = _read_text(src_local)
         except Exception: gtxt = ""
@@ -490,7 +489,9 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
         manifest = _build_manifest(
             job_name=job_name, gcode_key=paths["gcode"], info=info, applied=applied_g,
             original_key=original_key or paths["gcode"], origin_ext=origin,
-            presets={"printer": PRUSA_PRINTER_PRESET or None, "print": PRUSA_PRINT_PRESET or None, "filament": PRUSA_FILAMENT_PRESET or None},
+            presets={"printer": PRUSA_PRINTER_PRESET or None, "print": PRUSA_PRINT_PRESET or None,
+                     # ✅ ถ้า .env ไม่ได้ตั้ง PRUSA_FILAMENT_PRESET → ใช้ PLA map
+                     "filament": PRUSA_FILAMENT_PRESET or FILAMENT_PRESET_MAP.get("PLA") or None},
             preview_key=paths["preview"],
         )
         manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -525,16 +526,39 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
 
     # ===== STL → slice =====
     _ensure_slicer()
-    out_local = _mktemp_path(suffix=".gcode")
-    requested = _run_slice(src_local, out_local, data.slicing or {}, strict=PRUSA_STRICT_PRESET)
-    if not os.path.isfile(out_local):
-        for p in (src_local, out_local):
-            try: os.unlink(p)
-            except: pass
-        raise HTTPException(500, "Slicer did not produce G-code")
+    try:
+        result = slice_stl_to_gcode(
+            stl_path=Path(src_local),
+            out_dir=Path(tempfile.gettempdir()),
+            out_name=_safe_base(data.jobName) or Path(src_local).stem,
+            printer_profile=(data.slicing or {}).get("printer_profile")  or PRUSA_PRINTER_PRESET  or None,
+            print_profile=(data.slicing or {}).get("print_profile")      or PRUSA_PRINT_PRESET    or None,
+            # ✅ ถ้าไม่มี filament จาก env → ใช้ PLA จาก map
+            filament_profile=(data.slicing or {}).get("material_profile") or PRUSA_FILAMENT_PRESET
+                              or FILAMENT_PRESET_MAP.get((data.slicing or {}).get("material","PLA").upper())
+                              or FILAMENT_PRESET_MAP.get("PLA") or None,
+            bundle_path=PRUSA_BUNDLE_PATH or None,
+            datadir=PRUSA_DATADIR or None,
+            overrides={
+                "infill": (data.slicing or {}).get("infill"),
+                "walls": (data.slicing or {}).get("walls"),
+                "layer_height": (data.slicing or {}).get("layer_height"),
+                "nozzle": (data.slicing or {}).get("nozzle"),
+                "support": (data.slicing or {}).get("support") or "none",
+            },
+        )
+    except RuntimeError as e:
+        log.error("slice_stl_to_gcode runtime error: %s", e, exc_info=True)
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("slice_stl_to_gcode crashed")
+        raise HTTPException(500, f"slicing_failed:unknown: {e}")
 
-    try: gtxt = _read_text(out_local)
-    except Exception: gtxt = ""
+    out_local = result["gcode_path"]
+    try:
+        gtxt = _read_text(out_local)
+    except Exception:
+        gtxt = ""
 
     if DELETE_STAGING_AFTER_SLICE and (data.fileId or "").startswith("staging/"):
         try: delete_object(data.fileId)
@@ -542,11 +566,34 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
 
     info = parse_info(gtxt)
     applied_header = parse_applied_from_gcode(gtxt) or {}
+    requested = {
+        "fill_density": (data.slicing or {}).get("infill"),
+        "perimeters": (data.slicing or {}).get("walls"),
+        "support": (data.slicing or {}).get("support") or "none",
+        "layer_height": (data.slicing or {}).get("layer_height"),
+        "nozzle": (data.slicing or {}).get("nozzle"),
+        "thumbnail": PRUSA_ENABLE_THUMBNAIL,
+        "presets": {
+            "printer":  (data.slicing or {}).get("printer_profile")  or PRUSA_PRINTER_PRESET   or None,
+            "print":    (data.slicing or {}).get("print_profile")    or PRUSA_PRINT_PRESET     or None,
+            "filament": (data.slicing or {}).get("material_profile") or PRUSA_FILAMENT_PRESET
+                        or FILAMENT_PRESET_MAP.get((data.slicing or {}).get("material","PLA").upper())
+                        or FILAMENT_PRESET_MAP.get("PLA") or None,
+        },
+    }
     applied = {**requested, **{k: v for k, v in applied_header.items() if v is not None}}
 
     png_bytes = (_render_preview_bytes_from_local_gcode(out_local)
                  or _render_preview_bytes_from_text(gtxt)
                  or _placeholder_png())
+
+    if len(gtxt.encode("utf-8", errors="ignore")) < MIN_VALID_GCODE_BYTES:
+        try: os.unlink(out_local)
+        except: pass
+        try:
+            if downloaded_tmp: os.unlink(downloaded_tmp)
+        except: pass
+        raise HTTPException(400, "slicing_failed:empty_gcode")
 
     manifest = _build_manifest(
         job_name=job_name, gcode_key=paths["gcode"], info=info, applied=applied,
@@ -564,6 +611,10 @@ def preview(data: PreviewIn, user: User = Depends(get_confirmed_user)):
     for p in (src_local, out_local):
         try: os.unlink(p)
         except Exception: pass
+    if downloaded_tmp:
+        try: os.unlink(downloaded_tmp)
+        except Exception:
+            pass
 
     try: gcode_url = presign_get(final["gcode"])
     except Exception: gcode_url = None
@@ -609,7 +660,6 @@ def slice_endpoint(payload: SliceIn, user: User = Depends(get_confirmed_user)):
         applied=res.get("applied"),
     )
 
-# (thumbnail endpoint — noop เพื่อ compatibility)
 @router.get("/thumbnail", response_model=dict)
 def get_thumbnail(object_key: str = Query(..., alias="object_key"),
                   user: User = Depends(get_confirmed_user)):

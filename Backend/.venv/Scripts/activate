@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\apich\Documents\Wil Project\Wil_MR3DPrinter\WilProject_MR3DPrinter\Backend\.venv"
+VIRTUAL_ENV="C:\Users\ASriwong\OneDrive - Analog Devices, Inc\Desktop\WillProject\WilProject_MR3DPrinter\Backend\.venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

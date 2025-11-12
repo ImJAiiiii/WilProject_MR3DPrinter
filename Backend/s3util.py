@@ -82,6 +82,7 @@ _s3 = _session.client(
 # ใช้ ASCII-only เพื่อให้คีย์/โฟลเดอร์ปลอดภัยและสม่ำเสมอบนทุกระบบ
 _name_clean_re = re.compile(r"[^A-Za-z0-9_.-]+")
 _slug_clean_re = re.compile(r"[^A-Za-z0-9_-]+")
+_version_re = re.compile(r"^(.+?)_V(\d+)$", re.I)
 
 def _sanitize_filename(name: str) -> str:
     """Keep only [A-Za-z0-9_.-] and clip length."""
@@ -101,6 +102,21 @@ def _sanitize_folder(s: str) -> str:
     s = re.sub(r"[^A-Za-z0-9._-]+", "", s)  # ตัดตัวแปลก
     s = re.sub(r"_+", "_", s)               # ยุบ _ ซ้อน
     return s or "Model"
+
+def _ensure_version(filename: str) -> str:
+    """
+    ถ้าไฟล์ยังไม่มี suffix แบบ _V# ให้บังคับเติม _V1 ก่อนนามสกุล
+    เช่น banana_back.gcode -> banana_back_V1.gcode
+    """
+    try:
+        fn = Path(filename or "file").name
+    except Exception:
+        fn = filename or "file"
+    stem = Path(fn).stem
+    ext = Path(fn).suffix
+    if not _version_re.match(stem):
+        stem = f"{stem}_V1"
+    return f"{stem}{ext or ''}"
 
 def _validate_key(key: str) -> None:
     if not key or key.startswith("/") or ".." in key or "://" in key:
@@ -234,7 +250,8 @@ def new_storage_key_for_model(model: str, filename: str) -> str:
     e.g. storage/delta/CameraMounting_V1.gcode
     """
     sub = _model_sub_storage(model)
-    name = _sanitize_filename(Path(filename or "file").name)
+    # บังคับมีเวอร์ชัน (_V#) ก่อนเก็บ
+    name = _ensure_version(_sanitize_filename(Path(filename or "file").name))
     return f"storage/{sub}/{name}"
 
 def new_catalog_key_for_model(model: str, filename: str) -> str:
@@ -243,7 +260,8 @@ def new_catalog_key_for_model(model: str, filename: str) -> str:
     catalog/<ModelTitle>/<Stem>/<Filename>
     """
     title = _model_sub_catalog(model)
-    name  = _sanitize_filename(Path(filename or "file").name)
+    # บังคับมีเวอร์ชัน (_V#) ก่อนเก็บ
+    name  = _ensure_version(_sanitize_filename(Path(filename or "file").name))
     stem  = _sanitize_slug(Path(name).stem) or "model"
     return f"catalog/{title}/{stem}/{name}"
 

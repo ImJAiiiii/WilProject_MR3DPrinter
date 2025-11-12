@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=C:\Users\apich\Documents\Wil Project\Wil_MR3DPrinter\WilProject_MR3DPrinter\Backend\.venv
+set VIRTUAL_ENV=C:\Users\ASriwong\OneDrive - Analog Devices, Inc\Desktop\WillProject\WilProject_MR3DPrinter\Backend\.venv
 
 if not defined PROMPT set PROMPT=$P$G
 
