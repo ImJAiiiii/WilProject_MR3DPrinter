@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 import requests
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 # -----------------------------------------------------------------------------#
 # Logger
@@ -24,6 +25,19 @@ if not log.handlers:
 log.setLevel(logging.INFO)
 
 # -----------------------------------------------------------------------------#
+# ENV helpers
+# -----------------------------------------------------------------------------#
+def _truthy(v: Optional[str], default: bool = True) -> bool:
+    if v is None:
+        return default
+    return str(v).strip().lower() not in {"0", "false", "no", "off"}
+
+def _enabled(v: Optional[str], default: bool = False) -> bool:
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+# -----------------------------------------------------------------------------#
 # ENV
 # -----------------------------------------------------------------------------#
 FLOW_URL: str   = (os.getenv("FLOW_DM_URL") or "").strip()
@@ -32,13 +46,32 @@ FLOW_TOKEN: str = (os.getenv("FLOW_DM_TOKEN") or "").strip()
 TIMEOUT_S: float    = float(os.getenv("FLOW_DM_TIMEOUT") or "8.0")
 MAX_RETRIES: int    = int(os.getenv("FLOW_DM_MAX_RETRIES") or "2")  # total tries = 1 + MAX_RETRIES
 BACKOFF_S: float    = float(os.getenv("FLOW_DM_BACKOFF_SEC") or "0.7")
-VERIFY_TLS: bool    = os.getenv("FLOW_DM_VERIFY", "1").strip().lower() not in {"0", "false", "no", "off"}
-SEND_AUTH_HEADER: bool = os.getenv("FLOW_DM_SEND_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+# accept either FLOW_DM_VERIFY_TLS (preferred) or FLOW_DM_VERIFY (legacy)
+VERIFY_TLS: bool = _truthy(os.getenv("FLOW_DM_VERIFY_TLS", os.getenv("FLOW_DM_VERIFY", "1")), True)
+
+# accept either FLOW_DM_SEND_AUTH_HEADER (preferred) or FLOW_DM_SEND_AUTH (legacy)
+SEND_AUTH_HEADER: bool = _enabled(
+    os.getenv("FLOW_DM_SEND_AUTH_HEADER", os.getenv("FLOW_DM_SEND_AUTH", "0")), False
+)
 
 FRONTEND_BASE_URL: str = (os.getenv("FRONTEND_BASE_URL") or "").strip().strip('"').strip("'")
 PUBLIC_BASE_URL: str   = (os.getenv("PUBLIC_BASE_URL") or "").strip().strip('"').strip("'")
 
 HTTP_PROXY: Optional[str] = (os.getenv("FLOW_DM_HTTP_PROXY") or "").strip() or None
+
+# TLS CA bundle resolution (use first that exists)
+CA_BUNDLE: Optional[str] = None
+for _cand in (
+    os.getenv("REQUESTS_CA_BUNDLE"),
+    os.getenv("SSL_CERT_FILE"),
+):
+    if _cand and Path(_cand).exists():
+        CA_BUNDLE = str(Path(_cand))
+        break
+
+# Effective verify argument passed to requests
+VERIFY_ARG: bool | str = (CA_BUNDLE if (VERIFY_TLS and CA_BUNDLE) else VERIFY_TLS)
 
 # -----------------------------------------------------------------------------#
 # Utils
@@ -270,10 +303,11 @@ def notify_dm(
 
     masked_target = _mask_flow_url(_url)
     log.info(
-        "[DM] target=%s send_auth_header=%s verify_tls=%s timeout=%.1fs",
+        "[DM] target=%s send_auth_header=%s verify_tls=%s verify_arg=%s timeout=%.1fs",
         masked_target,
         SEND_AUTH_HEADER,
         VERIFY_TLS,
+        (CA_BUNDLE or str(VERIFY_TLS)),
         (timeout_s if timeout_s is not None else TIMEOUT_S),
     )
 
@@ -292,7 +326,7 @@ def notify_dm(
                 headers=headers,
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 timeout=timeout,
-                verify=VERIFY_TLS,
+                verify=VERIFY_ARG,  # <-- use CA bundle path if available
             )
             if 200 <= r.status_code < 300:
                 log.info("[DM] OK -> %s (%s)", _to, _short(payload))
