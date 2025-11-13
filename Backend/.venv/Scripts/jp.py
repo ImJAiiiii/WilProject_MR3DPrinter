@@ -1,4 +1,4 @@
-#!C:\Users\ASriwong\OneDrive - Analog Devices, Inc\Desktop\WillProject\WilProject_MR3DPrinter\Backend\.venv\Scripts\python.exe
+#!C:\Users\naamo\OneDrive - King Mongkut’s University of Technology Thonburi (KMUTT)\Desktop\WilProject\WilProject_MR3DPrinter\Backend\.venv\Scripts\python.exe
 
 import sys
 import json
