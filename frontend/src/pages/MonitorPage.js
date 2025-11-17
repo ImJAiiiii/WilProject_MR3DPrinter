@@ -35,7 +35,9 @@ export default function MonitorPage({
 
   // ---- state หลัก ----
   const [printerOnline, setPrinterOnline] = useState(false);
-  const [printerStatus, setPrinterStatus] = useState("Offline — waiting for connection");
+  const [printerStatus, setPrinterStatus] = useState(
+    "Offline — waiting for connection"
+  );
   const [printState, setPrintState] = useState("offline"); // printing | paused | error | ready | offline | idle
 
   const [estimatedSeconds, setEstimatedSeconds] = useState(0);
@@ -60,7 +62,9 @@ export default function MonitorPage({
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   // ---- SSE: /printers/:id/status/stream ----
@@ -75,21 +79,36 @@ export default function MonitorPage({
   });
 
   useEffect(() => {
-    try { sseCloserRef.current?.close?.(); } catch {}
+    try {
+      sseCloserRef.current?.close?.();
+    } catch {
+      /* ignore */
+    }
     sseCloserRef.current = null;
 
-    const path = `/printers/${encodeURIComponent(printerId)}/status/stream`;
+    const path = `/printers/${encodeURIComponent(
+      printerId
+    )}/status/stream`;
     const closer = api.sseWithBackoff(path, {
       withToken: true,
-      onOpen: () => { lastSseAtRef.current = Date.now(); },
+      onOpen: () => {
+        lastSseAtRef.current = Date.now();
+      },
       onMessage: (ev) => {
         if (!ev || typeof ev.data !== "string" || !ev.data.trim()) return;
         try {
           const msg = JSON.parse(ev.data);
           const s = msg?.data || msg;
-          const online = typeof s?.is_online === "boolean" ? s.is_online : !!s?.online;
+          const online =
+            typeof s?.is_online === "boolean"
+              ? s.is_online
+              : !!s?.online;
           const st = normalizeState(s?.state);
-          const statusText = s?.status_text || (online ? "Printer is ready" : "Offline — waiting for connection");
+          const statusText =
+            s?.status_text ||
+            (online
+              ? "Printer is ready"
+              : "Offline — waiting for connection");
 
           lastSseAtRef.current = Date.now();
           if (!mountedRef.current) return;
@@ -112,43 +131,35 @@ export default function MonitorPage({
             setRemainingSeconds(null);
             setEstimatedSeconds(0);
             setStartedAt(null);
-            setCurrentJob((prev) => prev && prev.completion === 100 ? prev : null);
+            setCurrentJob((prev) =>
+              prev && prev.completion === 100 ? prev : null
+            );
             setMaterial(null);
           }
         } catch {
-          /* ignore */
+          /* ignore parse error */
         }
       },
       onError: () => {
-        if (!mountedRef.current) return;
-        setPrinterOnline(false);
-        setPrintState("offline");
-        setPrinterStatus("Offline — waiting for connection");
-        lastStatusRef.current = { online: false, state: "offline", statusText: "Offline — waiting for connection" };
+        // ❗ อย่าบังคับ Offline ทันทีที่ SSE error
+        // ให้รอ OctoPrint poll หรือ status จริงเป็นคนบอกแทน
+        lastSseAtRef.current = 0;
       },
     });
     sseCloserRef.current = closer;
 
     return () => {
-      try { closer?.close?.(); } catch {}
+      try {
+        closer?.close?.();
+      } catch {
+        /* ignore */
+      }
       sseCloserRef.current = null;
     };
   }, [api, printerId]);
 
-  // Watchdog: ถ้าไม่ได้รับสัญญาณ SSE > 15s ให้ถือว่าออฟไลน์ชั่วคราว
-  useEffect(() => {
-    const t = setInterval(() => {
-      const last = lastSseAtRef.current || 0;
-      if (Date.now() - last > 15000) {
-        if (!mountedRef.current) return;
-        setPrinterOnline(false);
-        setPrintState("offline");
-        setPrinterStatus("Offline — waiting for connection");
-        lastStatusRef.current = { online: false, state: "offline", statusText: "Offline — waiting for connection" };
-      }
-    }, 5000);
-    return () => clearInterval(t);
-  }, []);
+  // (ลบ Watchdog เดิมที่บังคับ Offline เมื่อไม่มี SSE > 15s)
+  // เพราะจะทำให้สถานะกระพริบ offline/online เวลา connection ล่มชั่วคราว
 
   // ---- Poll: /printers/:id/octoprint/job ----
   const lastJobRef = useRef(null);
@@ -177,29 +188,43 @@ export default function MonitorPage({
         return;
       }
       try {
-        const data = await api.printer.octoprintJobSafe(printerId, { timeoutMs: 12000 });
+        const data = await api.printer.octoprintJobSafe(printerId, {
+          timeoutMs: 12000,
+        });
         if (!mountedRef.current) return;
-        if (!data) { scheduleNext(); return; }
+        if (!data) {
+          scheduleNext();
+          return;
+        }
 
         const job = data?.octoprint?.job || {};
         const progress = data?.octoprint?.progress || {};
         const stateText = String(data?.octoprint?.state || "");
         const mapped = normalizeState(stateText);
 
+        const isOnline = mapped !== "offline";
+
         // update mapping/online/status (เฉพาะเมื่อเปลี่ยน)
         if (lastStatusRef.current.state !== mapped) {
           setPrintState(mapped);
           lastStatusRef.current.state = mapped;
         }
-        if (lastStatusRef.current.online !== true) {
-          setPrinterOnline(true);
-          lastStatusRef.current.online = true;
+        if (lastStatusRef.current.online !== isOnline) {
+          setPrinterOnline(isOnline);
+          lastStatusRef.current.online = isOnline;
         }
+
         const mappedText =
-          mapped === "paused"   ? "Paused" :
-          mapped === "printing" ? "Printing..." :
-          mapped === "ready"    ? "Printer is ready" :
-          "Offline — waiting for connection";
+          mapped === "paused"
+            ? "Paused"
+            : mapped === "printing"
+            ? "Printing..."
+            : mapped === "ready"
+            ? "Printer is ready"
+            : mapped === "error"
+            ? "Error"
+            : "Offline — waiting for connection";
+
         if (lastStatusRef.current.statusText !== mappedText) {
           setPrinterStatus(mappedText);
           lastStatusRef.current.statusText = mappedText;
@@ -223,11 +248,16 @@ export default function MonitorPage({
         const completion = Number(progress?.completion ?? 0);
 
         const estimatedFromProgress =
-          printTime > 0 && printTimeLeft > 0 ? printTime + printTimeLeft : 0;
+          printTime > 0 && printTimeLeft > 0
+            ? printTime + printTimeLeft
+            : 0;
         const estimatedTotal =
-          estimatedFromProgress || Number(job?.estimatedPrintTime ?? 0) || 0;
+          estimatedFromProgress ||
+          Number(job?.estimatedPrintTime ?? 0) ||
+          0;
 
-        if (estimatedTotal !== estimatedSeconds) setEstimatedSeconds(estimatedTotal || 0);
+        if (estimatedTotal !== estimatedSeconds)
+          setEstimatedSeconds(estimatedTotal || 0);
 
         const nextRemain =
           printTimeLeft > 0
@@ -235,19 +265,29 @@ export default function MonitorPage({
             : estimatedTotal > 0
             ? Math.max(0, estimatedTotal - printTime)
             : null;
-        if (nextRemain !== remainingSeconds) setRemainingSeconds(nextRemain);
+        if (nextRemain !== remainingSeconds)
+          setRemainingSeconds(nextRemain);
 
         const nextStarted =
           printTime > 0
-            ? new Date(Date.now() - printTime * 1000).toISOString()
+            ? new Date(
+                Date.now() - printTime * 1000
+              ).toISOString()
             : null;
         if (nextStarted !== startedAt) setStartedAt(nextStarted);
 
         const nextJob = {
           name: fileName || "File Name",
           thumb: NO_IMAGE_URL,
-          durationMin: estimatedTotal ? Math.round(estimatedTotal / 60) : undefined,
-          startedAt: printTime > 0 ? new Date(Date.now() - printTime * 1000).toISOString() : undefined,
+          durationMin: estimatedTotal
+            ? Math.round(estimatedTotal / 60)
+            : undefined,
+          startedAt:
+            printTime > 0
+              ? new Date(
+                  Date.now() - printTime * 1000
+                ).toISOString()
+              : undefined,
           completion,
         };
         if (!shallowEq(lastJobRef.current || {}, nextJob)) {
@@ -256,7 +296,7 @@ export default function MonitorPage({
         }
         // setCurrentQueueNumber(..) // หากมีจาก BE อื่น
       } catch {
-        /* silent */
+        // ถ้าเรียก OctoPrint ไม่ได้ ให้ใช้สถานะล่าสุดต่อ ไม่บังคับ offline ทันที
       } finally {
         scheduleNext();
       }
@@ -267,7 +307,16 @@ export default function MonitorPage({
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [api, printerId, printState, NO_IMAGE_URL, estimatedSeconds, remainingSeconds, startedAt, material]);
+  }, [
+    api,
+    printerId,
+    printState,
+    NO_IMAGE_URL,
+    estimatedSeconds,
+    remainingSeconds,
+    startedAt,
+    material,
+  ]);
 
   // ---- Fallback current-job ----
   useEffect(() => {
@@ -279,18 +328,24 @@ export default function MonitorPage({
       if (printState !== "printing" || (!noEstimate && !noStart)) return;
 
       try {
-        const cj = await api.queue.current(printerId, { timeout: 8000 });
+        const cj = await api.queue.current(printerId, {
+          timeout: 8000,
+        });
         if (aborted || !mountedRef.current) return;
 
-        const tm = Number(cj?.time_min ?? cj?.timeMin ?? 0);
+        const tm = Number(
+          cj?.time_min ?? cj?.timeMin ?? 0
+        );
         const stIso = cj?.started_at ?? cj?.startedAt ?? null;
-        const remMin = cj?.remaining_min ?? cj?.remainingMin ?? null;
+        const remMin =
+          cj?.remaining_min ?? cj?.remainingMin ?? null;
 
         const mat =
           cj?.material ||
           cj?.template?.material ||
           cj?.manifest?.material ||
-          (Array.isArray(cj?.filaments) && cj.filaments[0]?.material) ||
+          (Array.isArray(cj?.filaments) &&
+            cj.filaments[0]?.material) ||
           null;
         if (mat) {
           const up = String(mat).toUpperCase();
@@ -299,22 +354,44 @@ export default function MonitorPage({
 
         if (tm > 0 && noEstimate) setEstimatedSeconds(tm * 60);
         if (stIso && noStart) {
-          const next = typeof stIso === "number" ? new Date(stIso).toISOString() : stIso;
+          const next =
+            typeof stIso === "number"
+              ? new Date(stIso).toISOString()
+              : stIso;
           setStartedAt(next);
         }
 
         if (remMin != null) {
-          setRemainingSeconds(Math.max(0, Math.round(remMin * 60)));
+          setRemainingSeconds(
+            Math.max(0, Math.round(remMin * 60))
+          );
         } else if (tm > 0 && stIso) {
-          const elapsed = Math.max(0, Math.floor((Date.now() - new Date(stIso).getTime()) / 1000));
-          setRemainingSeconds(Math.max(0, tm * 60 - elapsed));
+          const elapsed = Math.max(
+            0,
+            Math.floor(
+              (Date.now() -
+                new Date(stIso).getTime()) /
+                1000
+            )
+          );
+          setRemainingSeconds(
+            Math.max(0, tm * 60 - elapsed)
+          );
         }
 
         const nextJob = {
-          name: cj?.file_name || lastJobRef.current?.name || "File Name",
-          thumb: cj?.thumbnail_url || lastJobRef.current?.thumb || NO_IMAGE_URL,
-          durationMin: tm || lastJobRef.current?.durationMin,
-          startedAt: stIso || lastJobRef.current?.startedAt,
+          name:
+            cj?.file_name ||
+            lastJobRef.current?.name ||
+            "File Name",
+          thumb:
+            cj?.thumbnail_url ||
+            lastJobRef.current?.thumb ||
+            NO_IMAGE_URL,
+          durationMin:
+            tm || lastJobRef.current?.durationMin,
+          startedAt:
+            stIso || lastJobRef.current?.startedAt,
           completion: lastJobRef.current?.completion,
         };
         if (!shallowEq(lastJobRef.current || {}, nextJob)) {
@@ -323,7 +400,8 @@ export default function MonitorPage({
         }
         if (cj?.queue_number != null) {
           const qn = String(cj.queue_number).padStart(3, "0");
-          if (qn !== currentQueueNumber) setCurrentQueueNumber(qn);
+          if (qn !== currentQueueNumber)
+            setCurrentQueueNumber(qn);
         }
       } catch {
         /* silent */
@@ -331,8 +409,19 @@ export default function MonitorPage({
     }
 
     runFallback();
-    return () => { aborted = true; };
-  }, [api, printerId, printState, estimatedSeconds, startedAt, NO_IMAGE_URL, currentQueueNumber, material]);
+    return () => {
+      aborted = true;
+    };
+  }, [
+    api,
+    printerId,
+    printState,
+    estimatedSeconds,
+    startedAt,
+    NO_IMAGE_URL,
+    currentQueueNumber,
+    material,
+  ]);
 
   // ---- remaining text ----
   const remainingText = useMemo(() => {
@@ -347,7 +436,10 @@ export default function MonitorPage({
     <div className="monitor-layout">
       <div className="left-col">
         <div className="left-stack">
-          <PrinterStatus status={printerStatus} printerOnline={printerOnline} />
+          <PrinterStatus
+            status={printerStatus}
+            printerOnline={printerOnline}
+          />
 
           <VideoStream
             estimatedSeconds={estimatedSeconds}

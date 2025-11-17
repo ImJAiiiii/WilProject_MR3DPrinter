@@ -306,6 +306,9 @@ AUTO_START_ON_ENQUEUE    = _env_bool("AUTO_START_ON_ENQUEUE", True)
 RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
 ALLOW_ADMIN_HEADER       = _env_bool("ALLOW_ADMIN_HEADER", True)
 
+# ✅ ใหม่: toggle สำหรับ auto-dispatch ไป OctoPrint ตอน start-next
+PRINT_AUTOSTART          = _env_bool("PRINT_AUTOSTART", True)
+
 REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
 BED_EMPTY_MAX_AGE_SEC = int(os.getenv("BED_EMPTY_MAX_AGE_SEC") or "300")
 
@@ -323,6 +326,16 @@ _PREVIEW_LAST_TS: Dict[str, float] = {}
 QUEUE_IDEMP_TTL_SEC = float(os.getenv("QUEUE_IDEMP_TTL_SEC") or "12.0")
 _IDEMP_LOCK = Lock()
 _IDEMP_CACHE: Dict[str, Tuple[float, int]] = {}
+
+# ✅ log ค่า config ตอน start backend
+logger.info(
+    "[CFG] BACKEND_INTERNAL_BASE=%s REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT=%s BED_EMPTY_MAX_AGE_SEC=%s",
+    BACKEND_INTERNAL_BASE, REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT, BED_EMPTY_MAX_AGE_SEC,
+)
+logger.info(
+    "[CFG] AUTO_START_ON_ENQUEUE=%s PRINT_AUTOSTART=%s",
+    AUTO_START_ON_ENQUEUE, PRINT_AUTOSTART,
+)
 
 def _clean_env(v: Optional[str]) -> str:
     return (v or "").strip().strip('"').strip("'")
@@ -1109,6 +1122,10 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
         PrintJob.status == "processing"
     ).first()
     if has_processing:
+        logger.info(
+            "[QUEUE] start-next: already has processing job (printer=%s, job#%s)",
+            printer_id, has_processing.id,
+        )
         return None
 
     next_job = db.query(PrintJob).filter(
@@ -1116,12 +1133,21 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
         PrintJob.status == "queued"
     ).order_by(PrintJob.uploaded_at.asc(), PrintJob.id.asc()).first()
     if not next_job:
+        logger.info("[QUEUE] start-next: no queued job for printer=%s", printer_id)
         return None
+
+    logger.info(
+        "[QUEUE] start-next: candidate job#%s (printer=%s, name=%s)",
+        next_job.id, printer_id, next_job.name,
+    )
 
     if REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
         ok = _bed_empty_recent_sync(printer_id)
         if not ok:
-            logger.info("[QUEUE] block start: bed not confirmed empty (printer=%s, job#%s)", printer_id, next_job.id)
+            logger.info(
+                "[QUEUE] block start: bed not confirmed empty (printer=%s, job#%s)",
+                printer_id, next_job.id,
+            )
             return None
 
     if not _octo_configured():
@@ -1134,8 +1160,26 @@ def _start_next_job_if_idle(db: Session, printer_id: str, tasks: Optional[Backgr
         next_job.started_at = now
     db.add(next_job); db.commit(); db.refresh(next_job)
 
+    logger.info(
+        "[QUEUE] start-next: marked job#%s as processing (printer=%s, auto_start=%s)",
+        next_job.id, printer_id, PRINT_AUTOSTART,
+    )
+
     _bind_runmap_remote(printer_id, next_job)
-    _submit_bg(tasks, _dispatch_to_octoprint, db, next_job, tasks)
+
+    # ✅ ใช้ PRINT_AUTOSTART คุมว่าจะ push เข้า OctoPrint เลยไหม
+    if PRINT_AUTOSTART:
+        logger.info(
+            "[QUEUE] start-next: dispatch to OctoPrint for job#%s (printer=%s)",
+            next_job.id, printer_id,
+        )
+        _submit_bg(tasks, _dispatch_to_octoprint, db, next_job, tasks)
+    else:
+        logger.info(
+            "[QUEUE] start-next: NOT auto-dispatch to OctoPrint (PRINT_AUTOSTART=0) for job#%s (printer=%s)",
+            next_job.id, printer_id,
+        )
+
     return next_job
 
 # -------------------------- time computation ---------------------------------
@@ -1281,6 +1325,10 @@ def _enqueue_job(
     _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, evq)
 
     if AUTO_START_ON_ENQUEUE:
+        logger.info(
+            "[QUEUE] enqueue: AUTO_START_ON_ENQUEUE=1 → try start-next (printer=%s, job#%s)",
+            printer_id, job.id,
+        )
         _start_next_job_if_idle(db, printer_id, tasks)
 
     db.refresh(job)
@@ -1622,7 +1670,7 @@ def _check_admin_token(token: str):
 @router.post("/internal/printers/{printer_id}/queue/process-next")
 def internal_process_next(
     printer_id: str,
-    request: Request,                         # ✅ ย้ายมาก่อนพารามิเตอร์ที่มี default ทั้งหมด
+    request: Request,                         # ✅ ต้องมาก่อน parameter ที่มี default
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),

@@ -12,14 +12,31 @@ function parseTs(v) {
     if (typeof v === "number") return v;
     const t = Date.parse(v);
     return Number.isFinite(t) ? t : 0;
-  } catch { return 0; }
+  } catch {
+    return 0;
+  }
 }
-function fmtLocal(ts) { try { return ts ? new Date(ts).toLocaleString() : ""; } catch { return ""; } }
-function getExt(name = "") { const i = name.lastIndexOf("."); return i >= 0 ? name.slice(i + 1).toLowerCase() : ""; }
-function isGcodeExt(ext) { const e = (ext || "").toLowerCase(); return e === "gcode" || e === "gco" || e === "gc"; }
+function fmtLocal(ts) {
+  try {
+    return ts ? new Date(ts).toLocaleString() : "";
+  } catch {
+    return "";
+  }
+}
+function getExt(name = "") {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+function isGcodeExt(ext) {
+  const e = (ext || "").toLowerCase();
+  return e === "gcode" || e === "gco" || e === "gc";
+}
 function useDebounce(value, delay = 300) {
   const [v, setV] = useState(value);
-  useEffect(() => { const t = setTimeout(() => setV(value), delay); return () => clearTimeout(t); }, [value, delay]);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
   return v;
 }
 function looksLikeFilename(s = "") {
@@ -28,12 +45,26 @@ function looksLikeFilename(s = "") {
   if (x.includes("/") || x.includes("\\")) return true;
   if (x.includes(".")) {
     const ext = x.split(".").pop();
-    return ["gcode","gco","gc","stl","3mf","obj","png","jpg","jpeg","webp","svg","gif","pdf"].includes(ext);
+    return [
+      "gcode",
+      "gco",
+      "gc",
+      "stl",
+      "3mf",
+      "obj",
+      "png",
+      "jpg",
+      "jpeg",
+      "webp",
+      "svg",
+      "gif",
+      "pdf",
+    ].includes(ext);
   }
   return false;
 }
 
-/* ✅ Filters (ยังคงเหมือนเดิม) */
+/* ✅ Filters */
 const FILTERS = ["ALL", "DELTA", "HONTECH", "OTHER"];
 
 /* ---------- preview helpers (PNG from MinIO) ---------- */
@@ -43,13 +74,24 @@ function joinUrl(base, path) {
     const p = String(path || "");
     const origin =
       (typeof window !== "undefined" && window.location?.origin) || "";
-    return new URL(p, b ? (b.endsWith("/") ? b : b + "/") : origin + "/").toString();
-  } catch { return path; }
+    return new URL(
+      p,
+      b ? (b.endsWith("/") ? b : b + "/") : origin + "/"
+    ).toString();
+  } catch {
+    return path;
+  }
 }
 function withToken(u, tkn) {
   if (!tkn) return u;
-  try { const url = new URL(u); url.searchParams.set("token", tkn); return url.toString(); }
-  catch { const sep = u.includes("?") ? "&" : "?"; return `${u}${sep}token=${encodeURIComponent(tkn)}`; }
+  try {
+    const url = new URL(u);
+    url.searchParams.set("token", tkn);
+    return url.toString();
+  } catch {
+    const sep = u.includes("?") ? "&" : "?";
+    return `${u}${sep}token=${encodeURIComponent(tkn)}`;
+  }
 }
 function toRawUrl(apiBase, objectKey, token) {
   const path = `/api/files/raw?object_key=${encodeURIComponent(objectKey)}`;
@@ -63,13 +105,20 @@ function derivePreviewCandidatesFromGcodeKey(k) {
   const b = `${base}_preview.png`;
   return a === b ? [a] : [a, b];
 }
-function buildPreviewPair({ apiBase, token, key, cacheTag }) {
+
+// ✅ URL รูปนิ่ง ใช้ token คงที่สำหรับหน้า Storage
+function buildPreviewPair({ apiBase, token, key /*, cacheTag*/ }) {
   if (!key) return { src: "", alt: "" };
   const [c1, c2] = derivePreviewCandidatesFromGcodeKey(key);
-  const t = cacheTag || Date.now();
-  const mk = (k) => (k ? `${toRawUrl(apiBase, k, token)}&t=${encodeURIComponent(t)}` : "");
+
+  const mk = (k) => {
+    if (!k) return "";
+    return toRawUrl(apiBase, k, token);
+  };
+
   return { src: mk(c1), alt: mk(c2) };
 }
+
 function makeOnImgError(fallbackSrc) {
   return (e) => {
     const el = e.currentTarget;
@@ -90,18 +139,37 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   const api = useApi();
   const { user, token } = useAuth();
 
-  // ใช้ null เป็น state ขณะโหลด
+  // ❗ เก็บ api ลง ref เพื่อไม่ให้ fetchServer ผูกกับการเปลี่ยน instance api (ตอน refresh token)
+  const apiRef = useRef(api);
+  useEffect(() => {
+    apiRef.current = api;
+  }, [api]);
+
+  // ✅ token สำหรับ thumbnail ล็อกไว้ตอนเข้าหน้า ไม่ตาม token ใหม่
+  const [thumbToken] = useState(() => token);
+
+  // ใช้ null เป็น state ขณะโหลดครั้งแรก
   const [serverItems, setServerItems] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const dq = useDebounce(q, 300);
 
+  const isInitialLoading = serverItems === null && loading;
+
   // filter model
   const [modelFilter, setModelFilter] = useState(() => {
-    try { return localStorage.getItem("storage:modelFilter") || "ALL"; } catch { return "ALL"; }
+    try {
+      return localStorage.getItem("storage:modelFilter") || "ALL";
+    } catch {
+      return "ALL";
+    }
   });
-  useEffect(() => { try { localStorage.setItem("storage:modelFilter", modelFilter); } catch {} }, [modelFilter]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("storage:modelFilter", modelFilter);
+    } catch {}
+  }, [modelFilter]);
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [openReprint, setOpenReprint] = useState(false);
@@ -113,125 +181,153 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   const fetchSeq = useRef(0);
 
   /* ---------- fetch from backend (catalog) ---------- */
-  const fetchServer = useCallback(async () => {
-    const mySeq = ++fetchSeq.current;
-    setErr("");
-    setLoading(true);
-    setServerItems(null);
-    try {
-      const toApiModel = (x) =>
-        x === "DELTA"   ? "Delta"   :
-        x === "HONTECH" ? "Hontech" :
-        x === "OTHER"   ? "Other"   : undefined;
-      const modelParam = modelFilter === "ALL" ? undefined : toApiModel(modelFilter);
+  const fetchServer = useCallback(
+    async () => {
+      const mySeq = ++fetchSeq.current;
+      setErr("");
+      setLoading(true);
+      // ❌ ไม่ล้าง serverItems ระหว่างโหลด → DOM ค้าง ทำให้ไม่กระพริบ
+      try {
+        const toApiModel = (x) =>
+          x === "DELTA"
+            ? "Delta"
+            : x === "HONTECH"
+            ? "Hontech"
+            : x === "OTHER"
+            ? "Other"
+            : undefined;
+        const modelParam =
+          modelFilter === "ALL" ? undefined : toApiModel(modelFilter);
 
-      const res = await api.get(
-        "/api/storage/catalog",
-        {
-          model: modelParam,
-          q: dq || undefined,
-          offset: 0,
-          limit: 2000,
-          with_urls: 1,
-          with_head: 1,
-        },
-        { timeoutMs: 20000 }
-      );
-      const list = (res && Array.isArray(res.items)) ? res.items : [];
-      if (mySeq === fetchSeq.current) setServerItems(list);
-    } catch (e) {
-      if (mySeq === fetchSeq.current) {
-        console.error("storage.catalog failed:", e);
-        setErr(e?.message || "Failed to load storage.");
-        setServerItems([]);
+        // ใช้ apiRef.current แทน api ตรง ๆ
+        const res = await apiRef.current.get(
+          "/api/storage/catalog",
+          {
+            model: modelParam,
+            q: dq || undefined,
+            offset: 0,
+            limit: 2000,
+            with_urls: 1,
+            with_head: 1,
+          },
+          { timeoutMs: 20000 }
+        );
+        const list = res && Array.isArray(res.items) ? res.items : [];
+        if (mySeq === fetchSeq.current) setServerItems(list);
+      } catch (e) {
+        if (mySeq === fetchSeq.current) {
+          console.error("storage.catalog failed:", e);
+          setErr(e?.message || "Failed to load storage.");
+          setServerItems([]);
+        }
+      } finally {
+        if (mySeq === fetchSeq.current) setLoading(false);
       }
-    } finally {
-      if (mySeq === fetchSeq.current) setLoading(false);
-    }
-  }, [api, modelFilter, dq]);
+    },
+    [modelFilter, dq] // ✅ ตัด api ออกจาก deps
+  );
 
-  useEffect(() => { fetchServer(); }, [fetchServer]);
-  useEffect(() => { setErr(""); }, [dq, modelFilter]);
+  useEffect(() => {
+    fetchServer();
+  }, [fetchServer]);
+  useEffect(() => {
+    setErr("");
+  }, [dq, modelFilter]);
 
   /* ---------- adaptors ---------- */
-  const adaptFromServer = useCallback((raw) => {
-    const name = raw?.display_name || raw?.name || raw?.filename || "";
-    // ⛑️ เดา ext จาก object_key เป็น fallback กันกรองตกหล่น
-    const ext = (raw?.ext) || getExt(raw?.filename || name) || getExt(raw?.object_key || "");
-    const isGcode = isGcodeExt(ext);
-    const ts = parseTs(raw?.uploaded_at);
+  const adaptFromServer = useCallback(
+    (raw) => {
+      const name = raw?.display_name || raw?.name || raw?.filename || "";
+      const ext =
+        raw?.ext ||
+        getExt(raw?.filename || name) ||
+        getExt(raw?.object_key || "");
+      const isGcode = isGcodeExt(ext);
+      const ts = parseTs(raw?.uploaded_at);
 
-    // preview url
-    let thumbUrl = null, thumbAlt = "";
-    if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
-      thumbUrl = raw.preview_url;
-    } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      if (raw.preview_url.startsWith("/images/")) {
+      // preview url
+      let thumbUrl = null,
+        thumbAlt = "";
+      if (
+        typeof raw?.preview_url === "string" &&
+        /^https?:\/\//i.test(raw.preview_url)
+      ) {
+        // ถ้า backend ให้ URL ที่พร้อมใช้แล้ว ก็ใช้เลย (อาจมี token ฝั่งโน้น)
         thumbUrl = raw.preview_url;
-      } else {
-        thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
-      }
-    }
-
-    if (!thumbUrl) {
-      if (raw?.thumb) {
-        if (raw.thumb.startsWith("/images/")) {
-          thumbUrl = raw.thumb;
+      } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
+        if (raw.preview_url.startsWith("/images/")) {
+          thumbUrl = raw.preview_url;
         } else {
-          thumbUrl = toRawUrl(api.API_BASE, raw.thumb, token);
+          thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, thumbToken);
         }
-      } else {
-        const gk = raw?.gcode_key || (isGcode ? raw?.object_key : null);
-        const { src, alt } = buildPreviewPair({
-          apiBase: api.API_BASE,
-          token,
-          key: gk || raw?.object_key,
-          cacheTag: raw?.updated_at || raw?.uploaded_at || raw?.mtime
-        });
-        thumbUrl = src || process.env.PUBLIC_URL + "/images/3D.png";
-        thumbAlt = alt || "";
       }
-    }
 
-    const up = raw?.uploader || null;
-    let uploaderName = (up?.name || up?.employee_id || "") || null;
-    if (uploaderName && (uploaderName.toLowerCase() === (name || "").toLowerCase() || looksLikeFilename(uploaderName))) {
-      uploaderName = null;
-    }
-    const uploaderEmp = up?.employee_id || null;
+      if (!thumbUrl) {
+        if (raw?.thumb) {
+          if (raw.thumb.startsWith("/images/")) {
+            thumbUrl = raw.thumb;
+          } else {
+            thumbUrl = toRawUrl(api.API_BASE, raw.thumb, thumbToken);
+          }
+        } else {
+          const gk = raw?.gcode_key || (isGcode ? raw?.object_key : null);
+          const { src, alt } = buildPreviewPair({
+            apiBase: api.API_BASE,
+            token: thumbToken,
+            key: gk || raw?.object_key,
+            cacheTag: raw?.updated_at || raw?.uploaded_at || raw?.mtime, // ไม่ได้ใช้ใน buildPreviewPair แล้ว
+          });
+          thumbUrl = src || process.env.PUBLIC_URL + "/images/3D.png";
+          thumbAlt = alt || "";
+        }
+      }
 
-    let sizeText = raw?.size_text || null;
-    if (!sizeText && typeof raw?.size === "number") {
-      const mb = raw.size / (1024 * 1024);
-      sizeText = `${mb >= 1 ? mb.toFixed(1) : Math.max(raw.size, 1)} ${mb >= 1 ? "MB" : "B"}`;
-    }
+      const up = raw?.uploader || null;
+      let uploaderName = (up?.name || up?.employee_id || "") || null;
+      if (
+        uploaderName &&
+        (uploaderName.toLowerCase() === (name || "").toLowerCase() ||
+          looksLikeFilename(uploaderName))
+      ) {
+        uploaderName = null;
+      }
+      const uploaderEmp = up?.employee_id || null;
 
-    return {
-      id: raw?.object_key || name,
-      name,
-      piece: null,
-      model: raw?.model || "",
-      ext,
-      isGcode,
-      uploadedTs: ts,
-      uploadedAt: fmtLocal(ts),
-      sizeText,
-      thumb: thumbUrl || "/icon/file.png",
-      thumbAlt,
-      _raw: raw,
-      storageId: raw?.id ?? null,
-      object_key: raw?.object_key || null,
-      gcode_key: raw?.gcode_key || (isGcode ? raw?.object_key : null),
-      preview_key: raw?.thumb || null,
-      template: null,
-      stats: raw?.stats ?? null,
-      uploader: uploaderName,
-      uploaderEmployeeId: uploaderEmp
-    };
-  }, [api, token]);
+      let sizeText = raw?.size_text || null;
+      if (!sizeText && typeof raw?.size === "number") {
+        const mb = raw.size / (1024 * 1024);
+        sizeText = `${
+          mb >= 1 ? mb.toFixed(1) : Math.max(raw.size, 1)
+        } ${mb >= 1 ? "MB" : "B"}`;
+      }
+
+      return {
+        id: raw?.object_key || name,
+        name,
+        piece: null,
+        model: raw?.model || "",
+        ext,
+        isGcode,
+        uploadedTs: ts,
+        uploadedAt: fmtLocal(ts),
+        sizeText,
+        thumb: thumbUrl || "/icon/file.png",
+        thumbAlt,
+        _raw: raw,
+        storageId: raw?.id ?? null,
+        object_key: raw?.object_key || null,
+        gcode_key: raw?.gcode_key || (isGcode ? raw?.object_key : null),
+        preview_key: raw?.thumb || null,
+        template: null,
+        stats: raw?.stats ?? null,
+        uploader: uploaderName,
+        uploaderEmployeeId: uploaderEmp,
+      };
+    },
+    [api.API_BASE, thumbToken]
+  );
 
   /* ---------- merge ---------- */
-  // ❗ ใช้เฉพาะรายการที่มาจาก server (catalog) เท่านั้น
   const merged = useMemo(() => {
     return (serverItems || []).map(adaptFromServer);
   }, [serverItems, adaptFromServer]);
@@ -240,10 +336,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   const files = useMemo(() => {
     const kw = q.trim().toLowerCase();
     if (!kw || kw === (dq || "").trim().toLowerCase()) return merged;
-    return merged.filter(f =>
-      (f.name || "").toLowerCase().includes(kw) ||
-      ((f.uploader || "")).toLowerCase().includes(kw) ||
-      (f.model || "").toLowerCase().includes(kw)
+    return merged.filter(
+      (f) =>
+        (f.name || "").toLowerCase().includes(kw) ||
+        (f.uploader || "").toLowerCase().includes(kw) ||
+        (f.model || "").toLowerCase().includes(kw)
     );
   }, [q, dq, merged]);
 
@@ -261,25 +358,40 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
   }, [files]);
 
   /* ---------- permissions ---------- */
-  const isManager = !!(user?.is_manager || user?.can_manage_queue || (user?.role || "").toLowerCase() === "manager");
-  const isOwner = useCallback((f) => {
-    if (!user) return false;
-    const emp = (user.employee_id || "").trim();
-    const up = (f?.uploaderEmployeeId || "").trim();
-    return emp && up && emp === up;
-  }, [user]);
+  const isManager = !!(
+    user?.is_manager ||
+    user?.can_manage_queue ||
+    (user?.role || "").toLowerCase() === "manager"
+  );
+  const isOwner = useCallback(
+    (f) => {
+      if (!user) return false;
+      const emp = (user.employee_id || "").trim();
+      const up = (f?.uploaderEmployeeId || "").trim();
+      return emp && up && emp === up;
+    },
+    [user]
+  );
 
   const canDelete = useCallback(
-    (f) => f?.isGcode && (isOwner(f) || isManager) && (f.storageId != null || !!f.object_key),
+    (f) =>
+      f?.isGcode &&
+      (isOwner(f) || isManager) &&
+      (f.storageId != null || !!f.object_key),
     [isOwner, isManager]
   );
 
   /* ---------- actions ---------- */
-  const openModal = (f) => { setSelectedFile(f); setOpenReprint(true); };
+  const openModal = (f) => {
+    setSelectedFile(f);
+    setOpenReprint(true);
+  };
 
   const handlePrintAgain = async () => {
     if (!selectedFile) return;
-    try { onQueue?.(selectedFile); } finally {
+    try {
+      onQueue?.(selectedFile);
+    } finally {
       setOpenReprint(false);
       setSelectedFile(null);
       fetchServer();
@@ -309,7 +421,7 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     removeFromList(f.object_key);
 
     try {
-      await api.del(
+      await apiRef.current.del(
         "/api/storage/object-hard",
         { object_key: f.object_key },
         { timeoutMs: 18000 }
@@ -319,29 +431,31 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       console.error("hard delete failed:", error);
       const msg = String(error?.message || error || "Delete failed");
       if (/409|file_in_use_by_active_jobs/i.test(msg)) {
-        alert("This file is currently used by an active print job.\nPlease cancel/finish that job, then try again.");
+        alert(
+          "This file is currently used by an active print job.\nPlease cancel/finish that job, then try again."
+        );
       } else if (/403/.test(msg)) {
         alert("You don't have permission to delete this file.");
       } else {
         alert(msg);
       }
 
-      // Fallback compatibility (เผื่อรุ่นเก่า)
+      // Fallback compatibility
       try {
-        if (f.storageId != null && api.storage?.deleteById) {
-          await api.storage.deleteById(
+        if (f.storageId != null && apiRef.current.storage?.deleteById) {
+          await apiRef.current.storage.deleteById(
             f.storageId,
             { delete_object_from_s3: true },
             { timeoutMs: 15000 }
           );
         } else if (f.object_key) {
-          if (api.storage?.deleteByKey) {
-            await api.storage.deleteByKey(
+          if (apiRef.current.storage?.deleteByKey) {
+            await apiRef.current.storage.deleteByKey(
               { object_key: f.object_key, delete_object_from_s3: true },
               { timeoutMs: 15000 }
             );
           } else {
-            await api.del(
+            await apiRef.current.del(
               "/api/storage/by-key",
               { object_key: f.object_key, delete_object_from_s3: true },
               { timeoutMs: 15000 }
@@ -365,41 +479,79 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
 
   return (
     <div className="storage-page">
-      {/* Header: left = Search + Filters, right = counter + refresh */}
-      <div className="storage-header" style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1, minWidth: 240 }}>
+      {/* Header */}
+      <div
+        className="storage-header"
+        style={{ display: "flex", alignItems: "flex-start", gap: 14 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+            flex: 1,
+            minWidth: 240,
+          }}
+        >
           <div className="storage-search">
-            <img src={process.env.PUBLIC_URL + "/icon/search.png"} alt="search" />
+            <img
+              src={process.env.PUBLIC_URL + "/icon/search.png"}
+              alt="search"
+            />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape" && q) setQ(""); }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && q) setQ("");
+              }}
               placeholder="Search pieces/files"
               aria-label="Search files"
               style={{ height: 38 }}
             />
           </div>
 
-          <div className="storage-filters" role="tablist" aria-label="Model filter">
-            {FILTERS.map(m => (
+          <div
+            className="storage-filters"
+            role="tablist"
+            aria-label="Model filter"
+          >
+            {FILTERS.map((m) => (
               <button
                 key={m}
                 role="tab"
                 aria-selected={modelFilter === m}
-                className={`segmented-btn ${modelFilter === m ? "active" : ""}`}
+                className={`segmented-btn ${
+                  modelFilter === m ? "active" : ""
+                }`}
                 onClick={() => setModelFilter(m)}
               >
-                {m === "ALL" ? "All"
-                  : m === "DELTA" ? "Delta"
-                  : m === "HONTECH" ? "Hontech"
+                {m === "ALL"
+                  ? "All"
+                  : m === "DELTA"
+                  ? "Delta"
+                  : m === "HONTECH"
+                  ? "Hontech"
                   : "Other"}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="file-count" aria-live="polite" style={{ paddingTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-          {loading ? "…" : `${gcodeFiles.length} item${gcodeFiles.length === 1 ? "" : "s"}`}
+        <div
+          className="file-count"
+          aria-live="polite"
+          style={{
+            paddingTop: 6,
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          {loading
+            ? "…"
+            : `${gcodeFiles.length} item${
+                gcodeFiles.length === 1 ? "" : "s"
+              }`}
           <button
             type="button"
             className="btn-refresh"
@@ -413,32 +565,65 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
       </div>
 
-      {!!err && <div className="storage-error" role="alert">{err}</div>}
+      {!!err && (
+        <div className="storage-error" role="alert">
+          {err}
+        </div>
+      )}
 
-      {(!loading && gcodeFiles.length === 0) ? (
-        <div style={{ textAlign: "center", color: "#667", padding: "48px 12px" }}>
+      {isInitialLoading ? (
+        <div
+          style={{
+            textAlign: "center",
+            color: "#667",
+            padding: "48px 12px",
+          }}
+        >
+          <div style={{ marginTop: 8, fontWeight: 600 }}>
+            Loading storage…
+          </div>
+        </div>
+      ) : gcodeFiles.length === 0 ? (
+        <div
+          style={{
+            textAlign: "center",
+            color: "#667",
+            padding: "48px 12px",
+          }}
+        >
           <img
             src={process.env.PUBLIC_URL + "/icon/file.png"}
             alt=""
             width="72"
             height="72"
-            style={{ opacity: .7 }}
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{ opacity: 0.7 }}
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
           />
           <div style={{ marginTop: 8, fontWeight: 600 }}>No items</div>
-          <div style={{ fontSize: 12 }}>There are no items in catalog storage.</div>
+          <div style={{ fontSize: 12 }}>
+            There are no items in catalog storage.
+          </div>
         </div>
       ) : (
         <div className="file-grid" aria-busy={loading ? "true" : "false"}>
           {gcodeFiles.map((f) => {
-            const delDisabled = deletingKey && (deletingKey === (f.object_key || f.id || f.name));
+            const delDisabled =
+              deletingKey &&
+              deletingKey === (f.object_key || f.id || f.name);
             return (
-              <div key={`${f.object_key || f.id || f.name}`} className="file-card-wrap">
+              <div
+                key={`${f.object_key || f.id || f.name}`}
+                className="file-card-wrap"
+              >
                 <button
                   className="file-card"
                   onClick={() => openModal(f)}
-                  onKeyDown={(e) => (e.key === "Enter") && openModal(f)}
-                  aria-label={`Open ${f.name}${f.uploader ? `, uploaded by ${f.uploader}` : ""}`}
+                  onKeyDown={(e) => e.key === "Enter" && openModal(f)}
+                  aria-label={`Open ${f.name}${
+                    f.uploader ? `, uploaded by ${f.uploader}` : ""
+                  }`}
                   title={f.name}
                 >
                   <div className="thumb-wrap">
@@ -465,8 +650,14 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
                   </div>
 
                   <div className="file-meta">
-                    {!!f.sizeText && <span className="meta">{f.sizeText}</span>}
-                    <span className="meta">{f.isGcode ? "G-code" : (f.ext || "").toUpperCase() || "—"}</span>
+                    {!!f.sizeText && (
+                      <span className="meta">{f.sizeText}</span>
+                    )}
+                    <span className="meta">
+                      {f.isGcode
+                        ? "G-code"
+                        : (f.ext || "").toUpperCase() || "—"}
+                    </span>
                     {!!f.model && <span className="meta">{f.model}</span>}
                   </div>
                 </button>
@@ -475,7 +666,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
                   <div className="file-actions-row">
                     <button
                       className="file-delete"
-                      title={delDisabled ? "Deleting…" : "Delete (owner/manager only)"}
+                      title={
+                        delDisabled
+                          ? "Deleting…"
+                          : "Delete (owner/manager only)"
+                      }
                       aria-label={`Delete ${f.name}`}
                       onClick={(e) => handleDelete(e, f)}
                       disabled={!!delDisabled}
@@ -493,7 +688,10 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       <StorageReprintModal
         open={openReprint}
         file={selectedFile}
-        onClose={() => { setOpenReprint(false); setSelectedFile(null); }}
+        onClose={() => {
+          setOpenReprint(false);
+          setSelectedFile(null);
+        }}
         onPrint={handlePrintAgain}
       />
     </div>

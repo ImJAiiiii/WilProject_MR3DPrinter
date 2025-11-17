@@ -21,6 +21,9 @@ const RE = {
   layerMark: /^;\s*LAYER:\s*(-?\d+)/i,
   layerChange: /^;\s*LAYER_CHANGE\b/i,
   elapsed: /^;\s*TIME_ELAPSED:([0-9.]+)/i,
+  // 👇 ใหม่: อ่าน support mode จาก header ของ PrusaSlicer
+  supportMaterial: /;\s*support_material\s*=\s*([01])/i,
+  supportBuildPlate: /;\s*support_material_buildplate_only\s*=\s*([01])/i,
 };
 
 const MATERIAL_DENSITY = {
@@ -31,6 +34,15 @@ const MATERIAL_LABEL = {
   PLA:"PLA", PETG:"PETG", ABS:"ABS", ASA:"ASA", TPU:"TPU", TPE:"TPE",
   PC:"PC", PA:"Nylon", NYLON:"Nylon", HIPS:"HIPS", PET:"PET", PCTG:"PCTG"
 };
+
+// mapping โหมด support → label ที่โชว์ใน UI
+const SUPPORT_LABEL = {
+  none: "None",
+  build_plate_only: "Support on build plate only",
+  enforcers_only: "For support enforcers only",
+  everywhere: "Everywhere",
+};
+
 const DEFAULT_DIAMETER = 1.75;
 const DEFAULT_DENSITY = 1.27;
 
@@ -141,6 +153,19 @@ function parseInfoFromGcode(txt) {
   const fl = parseFirstLayerTime(txt);
   if (fl) info.first_layer = fl;
 
+  // 👇 ใหม่: support mode จาก header ของ PrusaSlicer
+  const sm = RE.supportMaterial.exec(txt);
+  if (sm) {
+    const on = sm[1].trim() === "1";
+    if (!on) {
+      info.support = "none";
+    } else {
+      const bp = RE.supportBuildPlate.exec(txt);
+      const bpOnly = bp && bp[1].trim() === "1";
+      info.support = bpOnly ? "build_plate_only" : "everywhere";
+    }
+  }
+
   return info;
 }
 
@@ -149,7 +174,7 @@ function mergeInfo(prev = {}, next = {}) {
   for (const k of Object.keys(next)) {
     const v = next[k];
     if (v == null || v === "") continue;
-    if (k === "total_text" || k === "filament_g" || k === "material") out[k] = v;
+    if (k === "total_text" || k === "filament_g" || k === "material" || k === "support") out[k] = v;
     else if (out[k] == null) out[k] = v;
   }
   return out;
@@ -164,11 +189,18 @@ export default function PreviewPrintModal({
   onConfirm,
   confirming = false
 }) {
-  // 🔹 เรียก Hooks ทั้งหมดแบบไม่ conditional
+  // ❌ เดิม: if (!open || !data) return null;  (ทำให้ hooks ถูกเรียก "หลัง early return")
+  // ✅ แก้เป็น: เรียก hooks ให้ครบก่อน แล้วค่อยเช็ค open/data ด้านล่าง
+
   const api = useApi();
   const { token } = useAuth();
+
+  // ใช้ ref เพื่อไม่ให้ useCallback เปลี่ยนทุกครั้งที่ token/api เปลี่ยน
   const apiRef = useRef(api);
   useEffect(() => { apiRef.current = api; }, [api]);
+
+  const tokenRef = useRef(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
 
   const gcodeKey    = data?.gcodeId ?? data?.gcodeKey ?? data?.gcode_key ?? null;
   const originalKey = data?.originalFileId ?? data?.originalKey ?? data?.original_key ?? null;
@@ -191,15 +223,18 @@ export default function PreviewPrintModal({
     async (start, length = 4_000_000) => {
       if (!gcodeKey) throw new Error("no gcode key");
       if (start < 0) throw new Error("negative-range-not-supported-by-api");
-      const u = new URL((apiRef.current.API_BASE || "") + "/api/storage/range", window.location.origin);
+      const base = apiRef.current.API_BASE || "";
+      const u = new URL(base + "/api/storage/range", window.location.origin);
       u.searchParams.set("object_key", gcodeKey);
       u.searchParams.set("start", String(start));
       u.searchParams.set("length", String(length));
-      const resp = await fetch(u.toString(), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const t = tokenRef.current;
+      const headers = t ? { Authorization: `Bearer ${t}` } : {};
+      const resp = await fetch(u.toString(), { headers });
       if (!(resp.ok || resp.status === 206)) throw new Error(`/api/storage/range ${resp.status}`);
       return textFromResp(resp);
     },
-    [gcodeKey, token]
+    [gcodeKey]
   );
 
   // 2) presign (รู้ขนาดไฟล์)
@@ -239,16 +274,19 @@ export default function PreviewPrintModal({
   const fetchGcodeChunkViaFilesRaw = useCallback(
     async (start, length = 4_000_000) => {
       if (!gcodeKey) throw new Error("no gcode key");
-      const u = new URL((apiRef.current.API_BASE || "") + "/files/raw", window.location.origin);
+      const base = apiRef.current.API_BASE || "";
+      const u = new URL(base + "/files/raw", window.location.origin);
       u.searchParams.set("object_key", gcodeKey);
-      const resp = await fetch(u.toString(), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const t = tokenRef.current;
+      const headers = t ? { Authorization: `Bearer ${t}` } : {};
+      const resp = await fetch(u.toString(), { headers });
       if (!resp.ok) throw new Error(`/files/raw ${resp.status}`);
       const full = await resp.text();
       if (start >= 0) return full.slice(start, start + length);
       const sliceLen = Math.max(0, length);
       return full.slice(Math.max(0, full.length - sliceLen));
     },
-    [gcodeKey, token]
+    [gcodeKey]
   );
 
   // orchestrator
@@ -311,6 +349,17 @@ export default function PreviewPrintModal({
       gcodeInfo?.material
     );
   const materialDisplay = materialKey ? (MATERIAL_LABEL[materialKey] || materialKey) : "-";
+
+  // 👇 ใหม่: เลือก support จาก settings ถ้ามี, ถ้าไม่มีค่อย fallback ไป gcodeInfo.support
+  const supportModeForDisplay =
+    data?.settings?.support ||
+    gcodeInfo?.support ||
+    null;
+
+  const supportDisplay =
+    supportModeForDisplay
+      ? (SUPPORT_LABEL[supportModeForDisplay] || supportModeForDisplay)
+      : (originalKey ? "-" : "—");
 
   const filamentDisplay = useMemo(() => {
     if (Number.isFinite(gcodeInfo?.filament_g)) return `${Number(gcodeInfo.filament_g).toFixed(2)} g`;
@@ -479,7 +528,7 @@ export default function PreviewPrintModal({
 
   const onScrimClick = () => { if (!confirming) onClose?.(); };
 
-  // 🔹 ทำ early return หลังจากเรียก Hooks แล้ว (ปลอดภัยสำหรับ Rules of Hooks)
+  // 🔧 ย้าย guard มาไว้หลัง hooks ทั้งหมด
   if (!open || !data) {
     return null;
   }
@@ -487,7 +536,6 @@ export default function PreviewPrintModal({
   return (
     <div className="pv-scrim" onClick={onScrimClick} role="presentation">
       <div
-        key={gcodeKey || "nogcode"}
         className="pv-card"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -519,7 +567,6 @@ export default function PreviewPrintModal({
             {gcodeKey ? (
               <GcodeWebGLPreview
                 ref={viewerRef}
-                key={gcodeKey}
                 objectKey={gcodeKey}
                 token={token}
                 apiBase={apiRef.current.API_BASE}
@@ -555,14 +602,7 @@ export default function PreviewPrintModal({
                 <dt className="pv-linkish">Sparse infill density</dt><dd>{data?.settings?.infill ?? (originalKey ? "-" : "—")}</dd>
                 <dt className="pv-linkish">Wall loops</dt><dd>{data?.settings?.walls ?? (originalKey ? "-" : "—")}</dd>
                 <dt className="pv-linkish">Support</dt>
-                <dd>{
-                  ({
-                    none: "None",
-                    build_plate_only: "Support on build plate only",
-                    enforcers_only: "For support enforcers only",
-                    everywhere: "Everywhere",
-                  }[data?.settings?.support] ?? (originalKey ? "-" : "—"))
-                }</dd>
+                <dd>{supportDisplay}</dd>
               </dl>
             </section>
 
