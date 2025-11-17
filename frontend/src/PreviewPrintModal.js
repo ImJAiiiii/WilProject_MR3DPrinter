@@ -164,8 +164,7 @@ export default function PreviewPrintModal({
   onConfirm,
   confirming = false
 }) {
-  if (!open || !data) return null;
-
+  // 🔹 เรียก Hooks ทั้งหมดแบบไม่ conditional
   const api = useApi();
   const { token } = useAuth();
   const apiRef = useRef(api);
@@ -479,6 +478,11 @@ export default function PreviewPrintModal({
   };
 
   const onScrimClick = () => { if (!confirming) onClose?.(); };
+
+  // 🔹 ทำ early return หลังจากเรียก Hooks แล้ว (ปลอดภัยสำหรับ Rules of Hooks)
+  if (!open || !data) {
+    return null;
+  }
 
   return (
     <div className="pv-scrim" onClick={onScrimClick} role="presentation">

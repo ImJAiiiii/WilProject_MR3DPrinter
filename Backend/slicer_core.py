@@ -1,6 +1,6 @@
 # backend/slicer_core.py
 from __future__ import annotations
-import os, re, json, tempfile, subprocess, logging, math, itertools
+import os, re, json, tempfile, subprocess, logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -11,7 +11,6 @@ log = logging.getLogger("slicer.core")
 try:
     import numpy as np
     import trimesh
-    from trimesh.transformations import euler_matrix  # สำหรับหมุน mesh ด้วยมุม euler
     _HAS_TRIMESH = True
 except Exception as e:
     _HAS_TRIMESH = False
@@ -139,82 +138,11 @@ def _repair_call(mesh, name: str):
     except Exception as e:
         log.debug("mesh.%s failed: %s", name, e)
 
-# =========================== Auto-orient (support-aware) ===========================
-# เปิด/ปิดฟีเจอร์ auto-orient ด้วย ENV: AUTO_ORIENT_ENABLED=1
-AUTO_ORIENT_ENABLED = _as_bool("AUTO_ORIENT_ENABLED", False)
-CANDIDATE_ANGLES = (0, 90, 180, 270)
-
-def _auto_orient_mesh_simple(mesh: "trimesh.Trimesh",
-                             support_mode: Optional[str] = None) -> "trimesh.Trimesh":
-    """
-    ลองหมุนโมเดลรอบแกน X/Y (0/90/180/270 องศา) แล้วเลือกท่าที่:
-      - ความสูงรวม (แกน Z) ต่ำ
-      - พื้นที่สัมผัสเตียงเยอะ
-      - ถ้า support = none → ลดพื้นที่ผิวที่ห้อยลง (overhang/หันลงล่าง) ให้มากที่สุด
-    """
-    if not _HAS_TRIMESH:
-        return mesh
-
-    no_support = (support_mode or "none").lower() == "none"
-
-    best_mesh = mesh.copy()
-    best_score = -1e18
-
-    for rx_deg in CANDIDATE_ANGLES:
-        for ry_deg in CANDIDATE_ANGLES:
-            m = mesh.copy()
-
-            # หมุนรอบ X/Y ตามมุมที่ลอง
-            M = euler_matrix(
-                math.radians(rx_deg),
-                math.radians(ry_deg),
-                0.0,  # ยังไม่หมุนรอบ Z เพราะไม่กระทบ lay-flat เท่าไร
-            )
-            m.apply_transform(M)
-
-            # เลื่อนให้ฐานลงมาแตะ Z=0
-            bbox = m.bounds
-            z_min = float(bbox[0][2])
-            if z_min != 0.0:
-                m.apply_translation([0.0, 0.0, -z_min])
-
-            # ความสูงรวมของโมเดล
-            bbox = m.bounds
-            height_z = float(bbox[1][2] - bbox[0][2])
-
-            # ประมาณพื้นที่สัมผัสเตียง + พื้นที่ overhang
-            try:
-                normals = m.face_normals  # (N, 3)
-                areas   = m.area_faces    # (N,)
-                # ฐานที่หันขึ้นด้านบน (normal Z > 0.9)
-                up_faces = normals[:, 2] > 0.9
-                contact_area = float(areas[up_faces].sum())
-                # ผิวที่หันลงล่าง (normal Z < 0) ถือว่าเสี่ยง overhang
-                down_faces = normals[:, 2] < 0.0
-                overhang_area = float(areas[down_faces].sum())
-            except Exception:
-                contact_area = 0.0
-                overhang_area = 0.0
-
-            # ถ้าไม่ใช้ support → ลงโทษ overhang แรงขึ้น
-            overhang_penalty = (0.05 if no_support else 0.01) * overhang_area
-
-            # ยิ่งเตี้ย + ฐานใหญ่ + overhang น้อย → score สูง
-            score = -height_z + 0.01 * contact_area - overhang_penalty
-
-            if score > best_score:
-                best_score = score
-                best_mesh = m
-
-    return best_mesh
-
 # =========================== STL prepare ===========================
 def prepare_stl_for_slicing(src_stl_path: Path,
-                            printer_profile: Optional[str],
-                            support_mode: Optional[str] = None) -> Tuple[Path, Dict[str, Any]]:
+                            printer_profile: Optional[str]) -> Tuple[Path, Dict[str, Any]]:
     """
-    โหลด STL -> ซ่อมเมช -> (auto-orient ถ้าเปิดใช้ และรู้ support_mode) -> เดาสเกล
-    -> ย่อให้พอดีเตียง -> วาง Z=0 และจัดกึ่งกลาง XY
+    โหลด STL -> ซ่อมเมช -> เดาสเกล -> ย่อให้พอดีเตียง -> วาง Z=0 และจัดกึ่งกลาง XY
     คืน (path ไฟล์ STL ชั่วคราวที่พร้อมเข้า Slicer, รายงานผล)
     """
     bed_x, bed_y, bed_z = _get_bed_size(printer_profile)
@@ -227,7 +155,6 @@ def prepare_stl_for_slicing(src_stl_path: Path,
             "fit_scale": 1.0,
             "final_size_xyz": None,
             "note": "trimesh not available; skipped repair/scale/place",
-            "support_mode": support_mode,
         }
 
     mesh = trimesh.load(str(src_stl_path), force='mesh')
@@ -239,13 +166,6 @@ def prepare_stl_for_slicing(src_stl_path: Path,
     _repair_call(mesh, "fix_normals")
     _repair_call(mesh, "remove_degenerate_faces")  # เคสที่คุณพัง
     _repair_call(mesh, "fill_holes")
-
-    # --- auto-orient ตาม support mode (ถ้าเปิดใช้ผ่าน ENV) ---
-    if AUTO_ORIENT_ENABLED:
-        try:
-            mesh = _auto_orient_mesh_simple(mesh, support_mode=support_mode)
-        except Exception as e:
-            log.debug("auto_orient skipped due to error: %s", e)
 
     # เดาหน่วย + scale
     bbox = mesh.bounds
@@ -298,7 +218,6 @@ def prepare_stl_for_slicing(src_stl_path: Path,
             float((mesh.bounds[1]-mesh.bounds[0])[1]),
             float((mesh.bounds[1]-mesh.bounds[0])[2]),
         ),
-        "support_mode": support_mode,
     }
     return out_p, report
 
@@ -436,22 +355,15 @@ def slice_stl_to_gcode(
 ) -> Dict:
     """
     แปลง STL → G-code:
-      1) ซ่อม + สเกล + จัดวาง STL ให้พอดีเตียงโดยอัตโนมัติ (รวม auto-orient ถ้าเปิดใช้ และดู support_mode)
+      1) ซ่อม + สเกล + จัดวาง STL ให้พอดีเตียงโดยอัตโนมัติ
       2) เรียก PrusaSlicer CLI ด้วย bundle/presets และ overrides
       3) คืนเมตา (เวลา/ฟิลาเมนต์) จากคอมเมนต์ใน G-code
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     out_gcode = out_dir / ((out_name or Path(stl_path).stem) + ".gcode")
 
-    # support_mode จาก overrides (ค่าที่ user เลือกในฟอร์ม)
-    support_mode = (overrides or {}).get("support")
-
-    # 1) เตรียม STL ให้พร้อมพิมพ์ (รู้ support_mode)
-    fixed_stl, prep = prepare_stl_for_slicing(
-        Path(stl_path),
-        printer_profile,
-        support_mode=support_mode,
-    )
+    # 1) เตรียม STL ให้พร้อมพิมพ์
+    fixed_stl, prep = prepare_stl_for_slicing(Path(stl_path), printer_profile)
 
     # 2) สร้างคำสั่งและเรียก CLI
     cmd = build_prusa_cmd(
@@ -484,6 +396,6 @@ def slice_stl_to_gcode(
     return {
         "gcode_path": str(out_gcode.resolve()),
         "log": logtxt,
-        "prep": prep,  # unit_scale / fit_scale / final_size_xyz / bed_xyz / support_mode
+        "prep": prep,  # unit_scale / fit_scale / final_size_xyz / bed_xyz
         **meta,
-    }
+    }  
