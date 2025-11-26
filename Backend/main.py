@@ -519,3 +519,11 @@ def debug_routes():
 @app.get("/")
 def root():
     return {"name": API_TITLE, "version": API_VERSION}
+
+from latency import router as latency_router
+
+app.include_router(latency_router)
+
+from latency_api import router as latency_router
+app.include_router(latency_router)
+

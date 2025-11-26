@@ -139,7 +139,9 @@ class PrinterStatusUpdateIn(BaseModel):
 # =========================
 # Print Queue / Jobs
 # =========================
-PrintJobStatus = Literal["queued", "processing", "paused", "canceled", "failed", "completed"]
+PrintJobStatus = Literal[
+    "queued", "processing", "paused", "canceled", "failed", "completed"
+]
 # 👇 เพิ่ม "octoprint" ให้รองรับค่าในฐานข้อมูล
 PrintJobSource = Literal["upload", "history", "storage", "octoprint"]
 
@@ -188,6 +190,10 @@ class PrintJobOut(BaseModel):
     printer_id: str
     employee_id: str
     employee_name: Optional[str] = None
+
+    # 👇 NEW: คนที่กดสั่งพิมพ์
+    requested_by_employee_id: Optional[str] = None
+    requested_by_name: Optional[str] = None
 
     name: str
     thumb: Optional[str] = None
@@ -550,3 +556,28 @@ class HistoryMergeItemIn(BaseModel):
 
 class HistoryMergeIn(BaseModel):
     items: List[HistoryMergeItemIn]
+
+
+# =========================
+# Latency Logs
+# =========================
+class LatencyLogIn(BaseModel):
+    """
+    ใช้ตอน client (Web / MR / Pi) ส่งผลการวัด latency เข้ามาเก็บใน DB
+    """
+    channel: str                     # "web" / "mr" / "pi" / "backend" ฯลฯ
+    path: str                        # endpoint หรือ event เช่น "/ping", "/printers/:id/pause"
+    t_send: datetime                 # เวลาที่ฝั่ง client เริ่มส่ง (UTC ISO8601)
+    t_recv: datetime                 # เวลาที่ฝั่ง client ได้ response / popup (UTC)
+    latency_ms: float                # ค่าความหน่วงที่คำนวณแล้ว (มิลลิวินาที)
+    note: Optional[str] = None       # เขียนเงื่อนไข test เช่น "LAN, idle" / "WiFi, printing"
+
+
+class LatencyLogOut(LatencyLogIn):
+    """
+    ใช้ตอน backend ส่งข้อมูล log กลับให้ FE / export ไปวิเคราะห์
+    """
+    id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

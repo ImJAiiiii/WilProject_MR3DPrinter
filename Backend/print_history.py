@@ -18,6 +18,8 @@ from schemas import PrintJobOut, PrintJobFileMeta
 
 # ใช้ helper เดิมเพื่อ ensure แถวใน storage_files จาก object_key (idempotent)
 from print_queue import _ensure_storage_record as ensure_storage_record
+# ✅ ใช้ตรวจว่ามีไฟล์จริงก่อน (ป้องกันสร้างแถวผี)
+from s3util import head_object
 
 router = APIRouter(prefix="/history", tags=["history"])
 log = logging.getLogger("history")
@@ -231,8 +233,6 @@ def _job_to_out(db: Session, current_emp: str, job: PrintJob) -> PrintJobOut:
     # Preview (thumb): ตรวจเช็คไฟล์จริงใน S3
     # ------------------------------
     try:
-        from s3util import head_object
-
         _ensure_out_file(out)
 
         # ถ้ายังไม่มีค่าอยู่แล้ว ค่อยไล่หา
@@ -270,7 +270,6 @@ def _job_to_out(db: Session, current_emp: str, job: PrintJob) -> PrintJobOut:
         # อย่าทำให้ล่มเพราะหา preview ไม่เจอ
         pass
 
-
     # remaining_min
     try:
         if job.status == "processing" and job.started_at and (job.time_min or 0) > 0:
@@ -286,20 +285,24 @@ def _job_to_out(db: Session, current_emp: str, job: PrintJob) -> PrintJobOut:
 
     return out
 
+
 def _normalize_brand_case(key: Optional[str]) -> Optional[str]:
     if not key:
         return key
     k = key.lstrip("/")
     k = k.replace("catalog/HONTECH/", "catalog/Hontech/")
     k = k.replace("catalog/DELTA/",   "catalog/Delta/")
+    k = k.replace("catalog/OTHER/",   "catalog/Other/")   # ✅ เพิ่ม Other
     k = k.replace("storage/HONTECH/", "storage/Hontech/")
     k = k.replace("storage/DELTA/",   "storage/Delta/")
+    k = k.replace("storage/OTHER/",   "storage/Other/")   # ✅ เพิ่ม Other
     return k
+
 
 def _preview_candidates_from_name(name: Optional[str]) -> List[str]:
     if not name:
         return []
-    brands = ["Hontech", "Delta"]
+    brands = ["Hontech", "Delta", "Other"]  # ✅ เผื่อค้นหาในโมเดล Other ด้วย
     bases = [name, name.replace("_oriented", ""), name.replace("_oriented", "") + "_oriented"]
     exts  = ["png", "jpg", "jpeg"]
     patterns = [
@@ -319,8 +322,10 @@ def _preview_candidates_from_name(name: Optional[str]) -> List[str]:
     seen, uniq = set(), []
     for k in out:
         if k not in seen:
-            uniq.append(k); seen.add(k)
+            uniq.append(k)
+            seen.add(k)
     return uniq
+
 
 # -------------------------------------------------------------------
 # GET /history/my
@@ -461,15 +466,27 @@ def merge_from_client(
     stored = 0
     considered = 0
 
+    # ✅ เปิด/ปิดข้อบังคับว่าต้องมีไฟล์จริงใน MinIO ก่อนค่อยสร้างแถว (ค่าเริ่มต้น: เปิด)
+    require_exists = (os.getenv("HISTORY_MERGE_REQUIRE_EXISTS", "1").strip().lower() in ("1", "true", "yes"))
+
     for it in items:
         try:
             gk = (it.gcode_key or "").strip()
             ok = (it.original_key or "").strip()
 
             for candidate in (gk, ok):
-                if candidate and candidate.startswith("storage/"):
+                # ✅ อนุญาตทั้ง storage/* และ catalog/* แต่กันแถวผีด้วยการเช็กไฟล์จริง
+                if candidate and candidate.startswith(("storage/", "catalog/")):
                     considered += 1
-                    filename_hint = (it.name or (it.file or {}).get("name") or candidate).strip() or candidate
+
+                    if require_exists:
+                        try:
+                            head_object(candidate)  # ถ้าไม่มีไฟล์จริงจะ error
+                        except Exception:
+                            # ข้ามรายการที่ไม่มีไฟล์จริง (กัน "แถวผี")
+                            continue
+
+                    filename_hint = (it.name or (it.file or {}).get("name") or os.path.basename(candidate)).strip() or candidate
                     ensure_storage_record(db, emp, candidate, filename_hint=filename_hint)
                     stored += 1
                     break

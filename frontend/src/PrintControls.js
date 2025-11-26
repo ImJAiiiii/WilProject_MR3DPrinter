@@ -1,9 +1,15 @@
+// src/PrintControls.js
 import React, { useMemo, useState, useEffect } from "react";
 import "./PrintControls.css";
-import PrintJobInfo from "./PrintJobInfo";
 
 /* ===== โมดัลยืนยันยกเลิก (prefix cc- เพื่อไม่ชนสไตล์เดิม) ===== */
-function ConfirmCancelModal({ open, onClose, onConfirm, code = "003", name = "Part Name" }) {
+function ConfirmCancelModal({
+  open,
+  onClose,
+  onConfirm,
+  code = "003",
+  name = "Part Name",
+}) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -44,15 +50,16 @@ function ConfirmCancelModal({ open, onClose, onConfirm, code = "003", name = "Pa
 
 export default function PrintControls({
   printerId = "prusa-core-one",
-  job,                 // { name, thumb } | null
-  queueNumber,         // "001" | null
-  state,               // (optional) 'printing' | 'paused' | 'ready' | 'error' | 'offline' | 'idle'
-  onAfterAction,       // (optional) callback เรียกหลัง pause/cancel สำเร็จ
+  job,           // { name, thumb } | null (fallback)
+  queueNumber,   // "001" | null    (fallback)
+  state,         // 'printing' | 'paused' | 'ready' | 'error' | 'offline' | 'idle'
+  onAfterAction, // callback หลัง pause/cancel สำเร็จ
 }) {
   // ===== Config/API =====
   const API_BASE = useMemo(() => process.env.REACT_APP_API_BASE || "", []);
   const token = useMemo(
-    () => (typeof window !== "undefined" ? localStorage.getItem("token") : null),
+    () =>
+      typeof window !== "undefined" ? localStorage.getItem("token") : null,
     []
   );
   const headers = useMemo(() => {
@@ -65,9 +72,74 @@ export default function PrintControls({
   const [isPausing, setIsPausing] = useState(false);
   const [isCanceling, setIsCanceling] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [message, setMessage] = useState(null); // ข้อความสั้นๆ หลังสั่งงาน
+  const [message, setMessage] = useState(null);
 
-  // ===== Actions → Backend =====
+  // ===== current-job จาก backend (map ให้เป็น shape เดียวกันเสมอ) =====
+  // normalized: { name, thumb, queueNumber }
+  const [jobFromApi, setJobFromApi] = useState(null);
+
+  useEffect(() => {
+    if (!API_BASE) return;
+    let cancelled = false;
+
+    // helper แปลง response จาก backend → รูปแบบเดียวกัน
+    const normalizeJob = (raw) => {
+      if (!raw || typeof raw !== "object") return null;
+      const name =
+        raw.fileName ??
+        raw.file_name ??
+        raw.name ??
+        null;
+      const thumb =
+        raw.thumbnailUrl ??
+        raw.thumbnail_url ??
+        raw.thumb ??
+        null;
+      const queueNumber =
+        raw.queueNumber ??
+        raw.queue_number ??
+        null;
+
+      return { name, thumb, queueNumber };
+    };
+
+    const fetchCurrentJob = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/printers/${encodeURIComponent(
+            printerId
+          )}/current-job`,
+          { headers }
+        );
+        if (!res.ok) {
+          // 404 = ไม่มีงาน active → เคลียร์แล้วจบ
+          if (!cancelled && res.status === 404) {
+            setJobFromApi(null);
+          }
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setJobFromApi(normalizeJob(data));
+      } catch (e) {
+        if (!cancelled) {
+          console.error("fetch current-job failed", e);
+        }
+      }
+    };
+
+    // ดึงครั้งแรก
+    fetchCurrentJob();
+    // แล้วดึงวนทุก 8 วินาที
+    const iv = setInterval(fetchCurrentJob, 8000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [API_BASE, headers, printerId]);
+
+  // ===== ฟังก์ชันยิง API POST =====
   const apiPost = async (path, body) => {
     if (!API_BASE) throw new Error("REACT_APP_API_BASE is not set");
     const res = await fetch(`${API_BASE}${path}`, {
@@ -75,7 +147,9 @@ export default function PrintControls({
       headers,
       body: body ? JSON.stringify(body) : null,
     });
-    const isJson = res.headers.get("content-type")?.includes("application/json");
+    const isJson = res.headers
+      .get("content-type")
+      ?.includes("application/json");
     const data = isJson ? await res.json().catch(() => ({})) : {};
     if (!res.ok) {
       const detail = data?.detail || `HTTP ${res.status}`;
@@ -84,31 +158,33 @@ export default function PrintControls({
     return data;
   };
 
-  // Pause/Resume: ถ้าระบุ state เข้ามาและเป็น paused ให้ตีความเป็น resume
+  // Pause/Resume: ถ้า state มีคำว่า "pause" → ถือว่าเป็น paused
   const pausedLike = String(state || "").toLowerCase().includes("pause");
 
   const handlePause = async () => {
-  try {
-    setMessage(null);
-    setIsPausing(true);
+    try {
+      setMessage(null);
+      setIsPausing(true);
 
-    // ✅ ใช้ toggle ตลอด → ถ้ากำลังพิมพ์จะ Pause, ถ้ากำลัง Paused จะ Resume
-    await apiPost(`/printers/${encodeURIComponent(printerId)}/octoprint/command`, {
-      command: "pause",
-      action: "toggle",
-    });
+      // toggle pause/resume ที่ OctoPrint
+      await apiPost(
+        `/printers/${encodeURIComponent(printerId)}/octoprint/command`,
+        {
+          command: "pause",
+          action: "toggle",
+        }
+      );
 
-    // แค่ข้อความบอกผู้ใช้ (อิงจาก label เดิมที่เราคาดไว้)
-    setMessage(pausedLike ? "Resumed" : "Paused");
-    onAfterAction?.("pause");
-  } catch (e) {
-    console.error(e);
-    setMessage(`Failed: ${e.message || e}`);
-  } finally {
-    setIsPausing(false);
-    setTimeout(() => setMessage(null), 3000);
-  }
-};
+      setMessage(pausedLike ? "Resumed" : "Paused");
+      onAfterAction?.("pause");
+    } catch (e) {
+      console.error(e);
+      setMessage(`Failed: ${e.message || e}`);
+    } finally {
+      setIsPausing(false);
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
 
   const handleCancelClick = () => setShowConfirm(true);
 
@@ -116,31 +192,45 @@ export default function PrintControls({
     try {
       setMessage(null);
       setIsCanceling(true);
-      // ใช้ wrapper สั้น ๆ ที่เราเพิ่มใน backend แล้ว
       await apiPost(`/printers/${encodeURIComponent(printerId)}/cancel`);
       setMessage("Canceled");
       onAfterAction?.("cancel");
     } catch (e) {
       console.error(e);
       setMessage(`Failed: ${e.message || e}`);
-      // fallback ยิงผ่าน /octoprint/command
+      // fallback ยิง cancel ตรงไปที่ OctoPrint
       try {
-        await apiPost(`/printers/${encodeURIComponent(printerId)}/octoprint/command`, {
-          command: "cancel",
-        });
-      } catch {}
+        await apiPost(
+          `/printers/${encodeURIComponent(printerId)}/octoprint/command`,
+          { command: "cancel" }
+        );
+      } catch {
+        /* ignore */
+      }
     } finally {
       setIsCanceling(false);
       setTimeout(() => setMessage(null), 3000);
     }
   };
 
-  // ✅ ใช้ข้อมูลจริงจาก props (fallback ถ้าไม่มี)
-  const previewSrc = job?.thumb || "/images/3D.png";
-  const displayName = job?.name || "File Name";
-  const displayQueue = queueNumber || "001";
+  // ================= ใช้ข้อมูลจริงสำหรับแสดงผล =================
 
-  // ป้ายสถานะใต้ปุ่ม (เล็กๆ)
+  // ให้ current-job จาก backend มี priority สูงสุด
+  const effectiveJob = jobFromApi
+    ? {
+        name: jobFromApi.name,
+        thumb: jobFromApi.thumb,
+      }
+    : job || null;
+
+  const effectiveQueueNumber = jobFromApi?.queueNumber != null
+    ? String(jobFromApi.queueNumber).padStart(3, "0")
+    : queueNumber || "001";
+
+  const previewSrc = effectiveJob?.thumb || "/icon/noimage.png";
+  const displayName = effectiveJob?.name || "File Name";
+  const displayQueue = effectiveQueueNumber;
+
   const ActionHint = () =>
     message ? (
       <div className="pc-hint" role="status" aria-live="polite">
@@ -161,8 +251,12 @@ export default function PrintControls({
           title={pausedLike ? "Resume" : "Pause"}
         >
           <img className="icon-default" src="/icon/pauseprint.png" alt="" />
-          <img className="icon-hover"   src="/icon/pauseprinthover.png" alt="" />
-          <img className="icon-active"  src="/icon/pauseprintselect.png" alt="" />
+          <img className="icon-hover" src="/icon/pauseprinthover.png" alt="" />
+          <img
+            className="icon-active"
+            src="/icon/pauseprintselect.png"
+            alt=""
+          />
           <span className="label">{pausedLike ? "Resume" : "Pause"}</span>
         </button>
 
@@ -177,8 +271,8 @@ export default function PrintControls({
           title="Cancel"
         >
           <img className="icon-default" src="/icon/cancelprint.png" alt="" />
-          <img className="icon-hover"   src="/icon/cancelhover.png" alt="" />
-          <img className="icon-active"  src="/icon/cancelselect.png" alt="" />
+          <img className="icon-hover" src="/icon/cancelhover.png" alt="" />
+          <img className="icon-active" src="/icon/cancelselect.png" alt="" />
           <span className="label">Cancel</span>
         </button>
 

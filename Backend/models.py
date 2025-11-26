@@ -20,7 +20,9 @@ from sqlalchemy import (
     CheckConstraint,
     event,
     literal,
+    func,          # ✅ เพิ่มบรรทัดนี้
 )
+
 from sqlalchemy.orm import relationship, column_property
 
 from db import Base
@@ -360,3 +362,19 @@ def _sf_before_update(mapper, connection, target: StorageFile):
     if not (target.name and target.name.strip()):
         target.name = (target.filename or "").strip()
     target.name_low = (target.name or "").strip().lower()
+
+#เก็บผล
+class LatencyLog(Base):
+    __tablename__ = "latency_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel = Column(String(32), nullable=False)          # web / mr / pi / backend
+    path = Column(String(255), nullable=False)            # เช่น /ping, /printers/:id/pause
+    t_send = Column(DateTime(timezone=True), nullable=False)
+    t_recv = Column(DateTime(timezone=True), nullable=False)
+    latency_ms = Column(Float, nullable=False)
+    note = Column(String(255), nullable=True)             # เช่น "LAN, idle", "WiFi, printing"
+    created_at = Column(DateTime(timezone=True),
+                        server_default=func.now(),
+                        nullable=False)
+    

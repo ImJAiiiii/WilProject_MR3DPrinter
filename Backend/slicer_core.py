@@ -1,16 +1,31 @@
 # backend/slicer_core.py
 from __future__ import annotations
-import os, re, subprocess
+import os, re, json, tempfile, subprocess, logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
+# ============ setup logger ============
+log = logging.getLogger("slicer.core")
+
+# ---------- STL fixer (graceful fallback) ----------
+try:
+    import numpy as np
+    import trimesh
+    _HAS_TRIMESH = True
+except Exception as e:
+    _HAS_TRIMESH = False
+    np = None
+    trimesh = None
+    log.warning("trimesh not available: %s", e)
+
 # -------- regex เมตาจากคอมเมนต์ G-code --------
-TIME_RE    = re.compile(r";\s*estimated printing time(?:\s*\(normal mode\))?\s*=\s*(.+)", re.I)
+TIME_RE    = re.compile(r";\s*estimated printing time(?:\s*\(normal mode\))?\s*[:=]\s*(.+)", re.I)
 TIME_SEC   = re.compile(r"^;\s*TIME:\s*(\d+)\s*$", re.I | re.M)
 FIL_G_RE   = re.compile(r";\s*(?:total )?filament used \[g]\s*=\s*([0-9.+-eE]+)", re.I)
 FIL_MM_RE  = re.compile(r";\s*filament used \[mm]\s*=\s*([0-9.+-eE]+)", re.I)
 FIL_CM3_RE = re.compile(r";\s*filament used \[cm3]\s*=\s*([0-9.+-eE]+)", re.I)
 
+# =========================== ENV helpers ===========================
 def _env(name: str, default: str = "") -> str:
     v = os.getenv(name)
     return v if v not in (None, "") else default
@@ -20,8 +35,16 @@ def _as_bool(name: str, default: bool = False) -> bool:
     if v is None or v == "": return default
     return str(v).lower() not in ("0", "false", "no")
 
+def _as_float_env(name: str, default: Optional[float]) -> Optional[float]:
+    s = os.getenv(name)
+    if not s: return default
+    try:
+        return float(s)
+    except:
+        return default
+
+# =========================== utils ===========================
 def _fmt_fill_density(val) -> Optional[str]:
-    """รับค่าได้ทั้ง 0.2 / 20 / "20%" → คืนสตริงตามที่ CLI รับได้"""
     if val is None: return None
     s = str(val).strip()
     if s.endswith("%"):
@@ -33,11 +56,172 @@ def _fmt_fill_density(val) -> Optional[str]:
     except:
         return s
     if 0.0 <= n <= 1.0:
-        # บางคนส่งสัดส่วน 0..1 → ให้ส่งแบบทศนิยมกลับไป
         return f"{n:.3f}"
     n = max(0.0, min(100.0, n))
     return f"{int(round(n))}%"
 
+# =========================== Bed size (profiles.json / ENV / default) ===========================
+DEFAULT_BED_X = 250.0
+DEFAULT_BED_Y = 210.0
+DEFAULT_BED_Z = 220.0
+
+def _load_bed_from_profiles(printer_profile: Optional[str]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    พยายามอ่านโปรไฟล์เตียงจากไฟล์ JSON (ตั้ง ENV: PRUSA_PROFILES_JSON ถ้าตำแหน่งไม่ใช่ไฟล์ดีฟอลต์)
+    ฟอร์แมตคาดหวังประมาณ:
+      { "printers": { "<name>": { "bed_x": 250, "bed_y": 210, "bed_z": 220 } } }
+    """
+    profiles_path = _env("PRUSA_PROFILES_JSON")
+    if not profiles_path:
+        candidate = Path(__file__).with_name("profiles.json")
+        if candidate.exists():
+            profiles_path = str(candidate)
+
+    if not profiles_path or not Path(profiles_path).exists() or not printer_profile:
+        return None, None, None
+
+    try:
+        with open(profiles_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        p = (data.get("printers") or {}).get(printer_profile) or {}
+        bx = float(p.get("bed_x")) if p.get("bed_x") is not None else None
+        by = float(p.get("bed_y")) if p.get("bed_y") is not None else None
+        bz = float(p.get("bed_z")) if p.get("bed_z") is not None else None
+        return bx, by, bz
+    except Exception as e:
+        log.warning("profiles.json load failed: %s", e)
+        return None, None, None
+
+def _get_bed_size(printer_profile: Optional[str]) -> Tuple[float, float, float]:
+    bx, by, bz = _load_bed_from_profiles(printer_profile)
+    bx = bx if bx else _as_float_env("PRUSA_BED_X", None)
+    by = by if by else _as_float_env("PRUSA_BED_Y", None)
+    bz = bz if bz else _as_float_env("PRUSA_BED_Z", None)
+    return (
+        bx if bx else DEFAULT_BED_X,
+        by if by else DEFAULT_BED_Y,
+        bz if bz else DEFAULT_BED_Z,
+    )
+
+# =========================== STL fixer helpers ===========================
+def _guess_units_scale(max_dim_mm: float) -> float:
+    if max_dim_mm > 2000:   return 1/1000.0
+    if max_dim_mm > 500:    return 1/10.0
+    if max_dim_mm < 2:      return 1000.0
+    return 1.0
+
+def _safe_scale_to_bed(size_xyz, bed_xyz):
+    sx = (bed_xyz[0]*0.95) / max(size_xyz[0], 1e-6)
+    sy = (bed_xyz[1]*0.95) / max(size_xyz[1], 1e-6)
+    sz = (bed_xyz[2]*0.95) / max(size_xyz[2], 1e-6)
+    return min(sx, sy, sz, 1.0)  # ไม่ขยาย เก็บไว้ย่อเท่านั้น
+
+def _repair_call(mesh, name: str):
+    """
+    เรียกฟังก์ชันซ่อมเมชให้ทนทานต่อความต่างของเวอร์ชัน:
+      1) ลองบนโมดูล trimesh.repair
+      2) ลองเมธอดบน mesh
+      3) ถ้าไม่มีทั้งคู่ให้ข้าม
+    """
+    try:
+        rep = getattr(trimesh, "repair", None) if trimesh else None
+        if rep and hasattr(rep, name):
+            getattr(rep, name)(mesh)
+            return
+    except Exception as e:
+        log.debug("repair.%s failed: %s", name, e)
+
+    try:
+        if hasattr(mesh, name):
+            getattr(mesh, name)()
+            return
+    except Exception as e:
+        log.debug("mesh.%s failed: %s", name, e)
+
+# =========================== STL prepare ===========================
+def prepare_stl_for_slicing(src_stl_path: Path,
+                            printer_profile: Optional[str]) -> Tuple[Path, Dict[str, Any]]:
+    """
+    โหลด STL -> ซ่อมเมช -> เดาสเกล -> ย่อให้พอดีเตียง -> วาง Z=0 และจัดกึ่งกลาง XY
+    คืน (path ไฟล์ STL ชั่วคราวที่พร้อมเข้า Slicer, รายงานผล)
+    """
+    bed_x, bed_y, bed_z = _get_bed_size(printer_profile)
+
+    # ถ้าไม่มี trimesh ให้ส่งผ่านไฟล์เดิม
+    if not _HAS_TRIMESH:
+        return Path(src_stl_path), {
+            "bed_xyz": (bed_x, bed_y, bed_z),
+            "unit_scale": 1.0,
+            "fit_scale": 1.0,
+            "final_size_xyz": None,
+            "note": "trimesh not available; skipped repair/scale/place",
+        }
+
+    mesh = trimesh.load(str(src_stl_path), force='mesh')
+    if mesh.is_empty:
+        raise RuntimeError("stl_error:empty_mesh")
+
+    # --- ซ่อมเมชแบบทนเวอร์ชัน ---
+    _repair_call(mesh, "fix_inversion")
+    _repair_call(mesh, "fix_normals")
+    _repair_call(mesh, "remove_degenerate_faces")  # เคสที่คุณพัง
+    _repair_call(mesh, "fill_holes")
+
+    # เดาหน่วย + scale
+    bbox = mesh.bounds
+    size = bbox[1] - bbox[0]
+    max_dim = float(np.max(size))
+    unit_scale = _guess_units_scale(max_dim)
+    try:
+        if unit_scale != 1.0:
+            mesh.apply_scale(unit_scale)
+    except Exception as e:
+        log.debug("apply_scale(unit) failed: %s", e)
+        unit_scale = 1.0
+
+    # ย่อให้พอดีเตียง (ไม่ขยาย)
+    bbox = mesh.bounds
+    size = bbox[1] - bbox[0]
+    fit_scale = _safe_scale_to_bed(size, (bed_x, bed_y, bed_z))
+    try:
+        if fit_scale < 1.0:
+            mesh.apply_scale(fit_scale)
+    except Exception as e:
+        log.debug("apply_scale(fit) failed: %s", e)
+        fit_scale = 1.0
+
+    # วางลงบนเตียง (Z=0) + จัดให้อยู่กึ่งกลาง XY
+    bbox = mesh.bounds
+    min_corner, max_corner = bbox
+    translate = [
+        - (min_corner[0] + max_corner[0]) / 2.0,
+        - (min_corner[1] + max_corner[1]) / 2.0,
+        -  min_corner[2],
+    ]
+    try:
+        mesh.apply_translation(translate)
+    except Exception as e:
+        log.debug("apply_translation failed: %s", e)
+
+    # ส่งออกเป็นไฟล์ชั่วคราว
+    fd, out_path = tempfile.mkstemp(suffix=".stl")
+    os.close(fd)
+    out_p = Path(out_path)
+    mesh.export(str(out_p))
+
+    report = {
+        "bed_xyz": (bed_x, bed_y, bed_z),
+        "unit_scale": unit_scale,
+        "fit_scale": fit_scale,
+        "final_size_xyz": (
+            float((mesh.bounds[1]-mesh.bounds[0])[0]),
+            float((mesh.bounds[1]-mesh.bounds[0])[1]),
+            float((mesh.bounds[1]-mesh.bounds[0])[2]),
+        ),
+    }
+    return out_p, report
+
+# =========================== Slicer command ===========================
 def build_prusa_cmd(
     stl_path: Path,
     out_gcode: Path,
@@ -46,7 +230,6 @@ def build_prusa_cmd(
     printer_profile: Optional[str] = None,
     datadir: Optional[str] = None,
     bundle_path: Optional[str] = None,
-    # overrides จากหน้าเว็บ (ทั้งหมดเป็น optional)
     overrides: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """
@@ -55,40 +238,45 @@ def build_prusa_cmd(
       - ตั้ง printer/print/material profile ชื่อให้ตรง bundle
       - รองรับ override: infill, walls(perimeters), support, layer_height, nozzle
     """
-    exe = _env("PRUSA_SLICER_BIN")
+    exe = _env("PRUSA_SLICER_BIN") or _env("PRUSA_SLICER_CLI")
     if not exe:
-        raise RuntimeError("PRUSA_SLICER_BIN is not set")
+        raise RuntimeError("PRUSA_SLICER_BIN is not set (or PRUSA_SLICER_CLI).")
+    if not Path(exe).exists():
+        raise RuntimeError(f"slicing_failed:slicer_not_found ({exe})")
 
     cmd = [exe, "--export-gcode", "--output", str(out_gcode)]
 
-    # ชี้ data dir (เช่น C:\Users\<user>\AppData\Roaming\PrusaSlicer)
+    if _as_bool("PRUSA_SW_RENDERER", True):
+        cmd.append("--sw-renderer")
+
     datadir = datadir or _env("PRUSA_DATADIR")
     if datadir:
         cmd += ["--datadir", datadir]
 
-    # โหลด config bundle (ถ้ามี)
     bundle_path = bundle_path or _env("PRUSA_BUNDLE_PATH")
     if bundle_path and Path(bundle_path).exists():
         cmd += ["--load", bundle_path]
 
-    # เลือก preset (รับจากพารามิเตอร์ ถ้าไม่ส่งมา → fallback .env)
     printer_profile  = printer_profile  or _env("PRUSA_PRINTER_PRESET")
     print_profile    = print_profile    or _env("PRUSA_PRINT_PRESET")
-    filament_profile = filament_profile or _env("PRUSA_FILAMENT_PRESET")
+    filament_profile = (
+        filament_profile
+        or _env("PRUSA_FILAMENT_PRESET")
+        or _env("FILAMENT_PROFILE_PLA")
+    )
 
     strict = _as_bool("PRUSA_STRICT_PRESET", False)
     if strict and (not printer_profile or not print_profile or not filament_profile):
-        raise RuntimeError("Missing preset names (printer/print/material) while PRUSA_STRICT_PRESET=1")
+        raise RuntimeError("Missing preset names (printer/print/filament) while PRUSA_STRICT_PRESET=1")
 
-    if printer_profile:  cmd += ["--printer-profile",  printer_profile]
-    if print_profile:    cmd += ["--print-profile",    print_profile]
-    if filament_profile: cmd += ["--material-profile", filament_profile]
+    # ใช้ชื่อสวิตช์ตามที่เครื่องรองรับ (บางรุ่นยังใช้ --print-profile / --material-profile)
+    if printer_profile:  cmd += ["--printer-profile",   printer_profile]
+    if print_profile:    cmd += ["--print-profile",     print_profile]
+    if filament_profile: cmd += ["--material-profile",  filament_profile]
 
-    # เปิด thumbnail ถ้าต้องการ
     if _as_bool("PRUSA_ENABLE_THUMBNAIL", False):
         cmd += ["--thumbnail=400x300", "--thumbnail=220x124"]
 
-    # overrides
     ov = overrides or {}
     if ov.get("infill") is not None:
         cmd.append(f"--fill-density={_fmt_fill_density(ov.get('infill'))}")
@@ -113,12 +301,13 @@ def build_prusa_cmd(
 def run_cmd(cmd: List[str]) -> Tuple[int, str]:
     try:
         cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
-        return cp.returncode, cp.stdout
+        return cp.returncode, (cp.stdout or "")
     except FileNotFoundError:
         return 127, "Slicer executable not found"
     except Exception as e:
         return 1, f"Error: {e}"
 
+# =========================== G-code meta ===========================
 def parse_meta_from_gcode(gcode_path: Path) -> Dict:
     meta: Dict[str, Optional[float] | Optional[str] | Optional[int]] = {
         "total_text": None,
@@ -129,12 +318,10 @@ def parse_meta_from_gcode(gcode_path: Path) -> Dict:
     }
     text = gcode_path.read_text(encoding="utf-8", errors="ignore")
 
-    # รูปแบบข้อความเวลา
     m = TIME_RE.search(text)
     if m:
         meta["total_text"] = m.group(1).strip()
     else:
-        # Fallback ;TIME:seconds
         ms = TIME_SEC.search(text)
         if ms:
             sec = int(ms.group(1))
@@ -153,32 +340,34 @@ def parse_meta_from_gcode(gcode_path: Path) -> Dict:
 
     return meta
 
+# =========================== Main entry: STL -> G-code ===========================
 def slice_stl_to_gcode(
     stl_path: Path,
     out_dir: Path,
     out_name: Optional[str] = None,
     *,
-    # เลือก preset (ถ้าไม่ส่งมา → fallback .env)
     printer_profile: Optional[str] = None,
     print_profile: Optional[str] = None,
     filament_profile: Optional[str] = None,
     bundle_path: Optional[str] = None,
     datadir: Optional[str] = None,
-    # overrides จากหน้าเว็บ
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     """
-    สั่ง PrusaSlicer แปลง STL → G-code โดย:
-      - โหลด bundle ผ่าน --load (ถ้ามี)
-      - ใช้ printer/print/material profile ที่กำหนด (หรือจาก .env)
-      - รองรับ overrides (infill / walls / support / layer_height / nozzle)
-    คืนค่า: { gcode_path, log, total_text, estimate_min, filament_g, filament_mm, filament_cm3 }
+    แปลง STL → G-code:
+      1) ซ่อม + สเกล + จัดวาง STL ให้พอดีเตียงโดยอัตโนมัติ
+      2) เรียก PrusaSlicer CLI ด้วย bundle/presets และ overrides
+      3) คืนเมตา (เวลา/ฟิลาเมนต์) จากคอมเมนต์ใน G-code
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_gcode = out_dir / ((out_name or stl_path.stem) + ".gcode")
+    out_gcode = out_dir / ((out_name or Path(stl_path).stem) + ".gcode")
 
+    # 1) เตรียม STL ให้พร้อมพิมพ์
+    fixed_stl, prep = prepare_stl_for_slicing(Path(stl_path), printer_profile)
+
+    # 2) สร้างคำสั่งและเรียก CLI
     cmd = build_prusa_cmd(
-        stl_path=stl_path,
+        stl_path=fixed_stl,
         out_gcode=out_gcode,
         print_profile=print_profile,
         filament_profile=filament_profile,
@@ -187,13 +376,61 @@ def slice_stl_to_gcode(
         bundle_path=bundle_path,
         overrides=overrides,
     )
-    rc, log = run_cmd(cmd)
-    if rc != 0 or not out_gcode.exists():
-        raise RuntimeError(f"Slicing failed (exit={rc}). Log:\n{log}")
+    rc, logtxt = run_cmd(cmd)
+
+    # 3) ตรวจผล / map ข้อผิดพลาดให้เข้าใจง่าย
+    log_l = (logtxt or "").lower()
+<<<<<<< HEAD
+
+    # เคสชิ้นงานอยู่นอก volume → ถือว่าผิดแน่นอน
+    if "outside of the print volume" in log_l or "no outline can be derived" in log_l:
+        raise RuntimeError("slicing_failed:outside_build_volume\n" + (logtxt or ""))
+
+    # ตรวจว่า log พูดถึง preset/profile หายหรือไม่
+    preset_issue = ("unknown preset" in log_l) or ("can't find" in log_l and "profile" in log_l)
+
+    # binary ไม่เจอเลย
+    if rc == 127:
+        raise RuntimeError("slicing_failed:slicer_not_found")
+
+    # exit code != 0
+    if rc != 0:
+        if preset_issue:
+            # non-zero + preset error → ให้รายงาน preset_not_found
+            raise RuntimeError("slicing_failed:preset_not_found\n" + (logtxt or ""))
+        # เคสอื่น ๆ ใช้ cli_exit_XX ไปก่อน
+        raise RuntimeError(f"slicing_failed:cli_exit_{rc}\n" + (logtxt or ""))
+
+    # ---- มาถึงตรงนี้หมายถึง rc == 0 (PrusaSlicer มองว่าสำเร็จ) ----
+    if preset_issue:
+        # ถ้ามีไฟล์ G-code ขนาดสมเหตุสมผล → treat เป็น warning เฉย ๆ
+        if out_gcode.exists() and out_gcode.stat().st_size >= 50:
+            log.warning(
+                "PrusaSlicer reported preset issue but G-code exists; "
+                "ignoring preset warning. (out=%s)", out_gcode
+            )
+        else:
+            # ไม่มีไฟล์/ไฟล์เล็กผิดปกติ → ถือว่า fail จริง
+            raise RuntimeError("slicing_failed:preset_not_found\n" + (logtxt or ""))
+
+=======
+    if "outside of the print volume" in log_l or "no outline can be derived" in log_l:
+        raise RuntimeError("slicing_failed:outside_build_volume\n" + (logtxt or ""))
+    if "unknown preset" in log_l or ("can't find" in log_l and "profile" in log_l):
+        raise RuntimeError("slicing_failed:preset_not_found\n" + (logtxt or ""))
+    if rc == 127:
+        raise RuntimeError("slicing_failed:slicer_not_found")
+    if rc != 0:
+        raise RuntimeError(f"slicing_failed:cli_exit_{rc}\n" + (logtxt or ""))
+
+>>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
+    if not out_gcode.exists() or out_gcode.stat().st_size < 50:
+        raise RuntimeError("slicing_failed:empty_gcode")
 
     meta = parse_meta_from_gcode(out_gcode)
     return {
         "gcode_path": str(out_gcode.resolve()),
-        "log": log,
+        "log": logtxt,
+        "prep": prep,  # unit_scale / fit_scale / final_size_xyz / bed_xyz
         **meta,
-    }
+    }  

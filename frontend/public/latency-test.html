@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Printer Latency Test</title>
+  <style>
+    body { font-family: sans-serif; padding: 16px; }
+    label { display: block; margin-top: 8px; }
+    input { padding: 4px 8px; width: 320px; max-width: 100%; }
+    button { margin-top: 8px; padding: 6px 12px; }
+    table { border-collapse: collapse; margin-top: 16px; width: 100%; max-width: 900px; }
+    th, td { border: 1px solid #ccc; padding: 4px 6px; font-size: 12px; text-align: left; }
+    th { background: #f3f3f3; }
+    .log { font-size: 12px; margin-top: 8px; white-space: pre-wrap; max-height: 200px; overflow: auto; border: 1px solid #ddd; padding: 6px; }
+    h2 { margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Printer Latency Test</h1>
+
+  <p>หน้านี้ไว้เทสต์ latency เฉพาะ ใช้ข้อมูลจาก backend เดิม ไม่แตะโค้ดเดิม</p>
+
+  <label>
+    API Base URL:
+    <input id="apiBase" value="http://127.0.0.1:8000" />
+  </label>
+
+  <label>
+    Printer ID:
+    <input id="printerId" value="prusa-core-one" />
+  </label>
+
+  <p>
+    <button id="btnConnectSSE">1) Connect SSE (status/stream)</button>
+    <button id="btnPause">2) Send Pause/Resume (toggle)</button>
+  </p>
+
+  <div class="log" id="log"></div>
+
+  <h2>Command Latency (Pause/Resume)</h2>
+  <button id="btnDownloadCmd">Download Command CSV</button>
+  <table id="tblCmd" style="display:none;">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Command</th>
+        <th>t_user_cmd</th>
+        <th>t_ui_update</th>
+        <th>Latency (ms)</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Status Update Latency (Temp / Speed / Progress)</h2>
+  <p>อันนี้ดูว่าหน้าจอได้รับสถานะใหม่ (รวม temp, progress) ถี่แค่ไหน</p>
+  <button id="btnDownloadStatus">Download Status CSV</button>
+  <table id="tblStatus" style="display:none;">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>t_ui_update</th>
+        <th>Δจากครั้งก่อน (ms)</th>
+        <th>progress</th>
+        <th>temp_nozzle</th>
+        <th>temp_bed</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const logEl = document.getElementById("log");
+
+    const tblCmdEl = document.getElementById("tblCmd");
+    const tbodyCmdEl = tblCmdEl.querySelector("tbody");
+
+    const tblStatusEl = document.getElementById("tblStatus");
+    const tbodyStatusEl = tblStatusEl.querySelector("tbody");
+
+    let es = null;                    // SSE EventSource
+    let cmdMeasurements = [];         // เก็บผลการเทสต์ command latency
+    let statusSamples = [];           // เก็บข้อมูล status update (temp/speed/progress)
+    let pendingCmd = null;            // { command, printerId, tUserCmdIso }
+    let lastStatusUiTime = null;      // เวลา UI ได้ status ครั้งก่อน (สำหรับคำนวณ Δเวลา)
+
+    function appendLog(msg) {
+      const now = new Date().toISOString();
+      logEl.textContent += `[${now}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function getApiBase() {
+      return document.getElementById("apiBase").value.trim().replace(/\/+$/,"");
+    }
+
+    function getPrinterId() {
+      return document.getElementById("printerId").value.trim();
+    }
+
+    function getToken() {
+      // พยายามดึง token จาก localStorage ตาม AuthContext ใหม่
+      return (
+        localStorage.getItem("auth.access_token") ||
+        localStorage.getItem("token") ||
+        ""
+      );
+    }
+
+    // ---------- STEP 1: Connect SSE ----------
+    document.getElementById("btnConnectSSE").onclick = () => {
+      const apiBase = getApiBase();
+      const printerId = getPrinterId();
+      const token = getToken();
+
+      if (!token) {
+        alert("ไม่พบ access token ใน localStorage\\nกรุณา login หน้าเว็บหลักก่อน แล้วค่อยกลับมาหน้านี้");
+        return;
+      }
+
+      if (es) {
+        es.close();
+        es = null;
+      }
+
+      const url = `${apiBase}/printers/${encodeURIComponent(printerId)}/status/stream?token=${encodeURIComponent(token)}&init_limit=0`;
+      appendLog(`Connecting SSE: ${url}`);
+
+      es = new EventSource(url);
+      es.onopen = () => {
+        appendLog("SSE connected");
+      };
+      es.onerror = (err) => {
+        appendLog("SSE error (ดู console เพิ่มเติม)");
+        console.error("SSE error", err);
+      };
+      es.onmessage = (ev) => {
+        if (!ev || typeof ev.data !== "string" || !ev.data.trim()) return;
+        try {
+          const msg = JSON.parse(ev.data);
+          const data = msg?.data || msg;
+
+          const tUiUpdateIso = new Date().toISOString();
+          const tUiUpdateMs = Date.now();
+
+          // ----- 2.1: เก็บ status update latency (ความถี่ในการอัปเดต temp/progress) -----
+          let deltaMs = null;
+          if (lastStatusUiTime != null) {
+            deltaMs = tUiUpdateMs - lastStatusUiTime;
+          }
+          lastStatusUiTime = tUiUpdateMs;
+
+          const s = {
+            index: statusSamples.length + 1,
+            t_ui_update_iso: tUiUpdateIso,
+            delta_ms_from_prev: deltaMs,
+            progress: data?.progress ?? null,
+            temp_nozzle: data?.temp_nozzle ?? null,
+            temp_bed: data?.temp_bed ?? null,
+          };
+          statusSamples.push(s);
+          renderStatusTable();
+
+          // ----- 2.2: ถ้ามีคำสั่งค้างอยู่ → วัด command latency (pause/resume) -----
+          if (pendingCmd) {
+            const m = {
+              index: cmdMeasurements.length + 1,
+              command: pendingCmd.command,
+              printerId,
+              t_user_cmd_iso: pendingCmd.tUserCmdIso,
+              t_ui_update_iso: tUiUpdateIso,
+            };
+            const t1 = Date.parse(m.t_user_cmd_iso);
+            const t2 = Date.parse(m.t_ui_update_iso);
+            m.latency_ms = (Number.isFinite(t1) && Number.isFinite(t2)) ? (t2 - t1) : null;
+            cmdMeasurements.push(m);
+            pendingCmd = null;
+            appendLog(`Got status after command: ${m.command}, latency ≈ ${m.latency_ms} ms`);
+            renderCmdTable();
+          }
+        } catch (e) {
+          console.error("SSE parse error", e, ev.data);
+        }
+      };
+    };
+
+    // ---------- STEP 2: Send Pause/Resume ----------
+    document.getElementById("btnPause").onclick = async () => {
+      const apiBase = getApiBase();
+      const printerId = getPrinterId();
+      const token = getToken();
+      if (!token) {
+        alert("ไม่พบ access token ใน localStorage");
+        return;
+      }
+      if (!es) {
+        alert("ยังไม่ได้กด Connect SSE เลย");
+        return;
+      }
+
+      const tUserCmdIso = new Date().toISOString();
+      const cmd = "pause"; // ใช้ toggle: ถ้า printing → pause, ถ้า paused → resume
+
+      pendingCmd = {
+        command: cmd,
+        printerId,
+        tUserCmdIso,
+      };
+
+      appendLog(`Sending command '${cmd}' at ${tUserCmdIso}`);
+
+      try {
+        const res = await fetch(`${apiBase}/printers/${encodeURIComponent(printerId)}/octoprint/command`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            command: "pause",
+            action: "toggle",
+          }),
+        });
+        if (!res.ok) {
+          appendLog(`HTTP error from backend: ${res.status}`);
+          console.error("backend error", await res.text());
+        } else {
+          appendLog("Backend accepted command, waiting for status update via SSE...");
+        }
+      } catch (e) {
+        appendLog("Fetch error (ดู console)");
+        console.error(e);
+      }
+    };
+
+    // ---------- Render tables ----------
+    function renderCmdTable() {
+      if (!cmdMeasurements.length) {
+        tblCmdEl.style.display = "none";
+        return;
+      }
+      tblCmdEl.style.display = "table";
+      tbodyCmdEl.innerHTML = "";
+      cmdMeasurements.forEach(m => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${m.index}</td>
+          <td>${m.command}</td>
+          <td>${m.t_user_cmd_iso}</td>
+          <td>${m.t_ui_update_iso}</td>
+          <td>${m.latency_ms != null ? m.latency_ms.toFixed(1) : ""}</td>
+        `;
+        tbodyCmdEl.appendChild(tr);
+      });
+    }
+
+    function renderStatusTable() {
+      if (!statusSamples.length) {
+        tblStatusEl.style.display = "none";
+        return;
+      }
+      tblStatusEl.style.display = "table";
+      tbodyStatusEl.innerHTML = "";
+      statusSamples.forEach(s => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${s.index}</td>
+          <td>${s.t_ui_update_iso}</td>
+          <td>${s.delta_ms_from_prev != null ? s.delta_ms_from_prev.toFixed(1) : ""}</td>
+          <td>${s.progress != null ? s.progress : ""}</td>
+          <td>${s.temp_nozzle != null ? s.temp_nozzle : ""}</td>
+          <td>${s.temp_bed != null ? s.temp_bed : ""}</td>
+        `;
+        tbodyStatusEl.appendChild(tr);
+      });
+    }
+
+    // ---------- Download CSVs ----------
+    function downloadCsv(filename, rows, headers) {
+      if (!rows.length) {
+        alert("ยังไม่มีข้อมูลให้ดาวน์โหลด");
+        return;
+      }
+      const lines = [headers.join(",")];
+      rows.forEach(r => {
+        const row = headers.map(h => {
+          let v = r[h];
+          if (v == null) return "";
+          if (typeof v === "string" && v.includes(",")) {
+            return `"${v.replace(/"/g, '""')}"`;
+          }
+          return v;
+        });
+        lines.push(row.join(","));
+      });
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById("btnDownloadCmd").onclick = () => {
+      downloadCsv("command_latency.csv", cmdMeasurements, [
+        "index",
+        "printerId",
+        "command",
+        "t_user_cmd_iso",
+        "t_ui_update_iso",
+        "latency_ms",
+      ]);
+    };
+
+    document.getElementById("btnDownloadStatus").onclick = () => {
+      downloadCsv("status_latency.csv", statusSamples, [
+        "index",
+        "t_ui_update_iso",
+        "delta_ms_from_prev",
+        "progress",
+        "temp_nozzle",
+        "temp_bed",
+      ]);
+    };
+  </script>
+</body>
+</html>

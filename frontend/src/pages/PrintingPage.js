@@ -33,23 +33,28 @@ export default function PrintingPage({
   const [showHistory, setShowHistory] = useState(false);
 
   // ========== Confirm cancel ==========
-  const [confirmJob,   setConfirmJob]   = useState(null);
-  const [confirmBusy,  setConfirmBusy]  = useState(false);
-  const openConfirm  = (job) => setConfirmJob(job);
-  const closeConfirm = () => { if (!confirmBusy) setConfirmJob(null); };
+  const [confirmJob, setConfirmJob] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const openConfirm = (job) => setConfirmJob(job);
+  const closeConfirm = () => {
+    if (!confirmBusy) setConfirmJob(null);
+  };
 
   // fallback: ยกเลิกผ่าน API ตรง ถ้า parent ไม่ได้ส่ง onCancelJob มา
-  const cancelViaApi = useCallback(async (job) => {
-    const printerId =
-      job?.printer_id ||
-      job?.printerId ||
-      job?.printer?.id ||
-      process.env.REACT_APP_PRINTER_ID ||
-      "prusa-core-one";
-    const jid = job?.id ?? job?.job_id ?? job?.jobId;
-    if (!jid) throw new Error("Missing job id");
-    await api.queue.cancel(printerId, jid);
-  }, [api]);
+  const cancelViaApi = useCallback(
+    async (job) => {
+      const printerId =
+        job?.printer_id ||
+        job?.printerId ||
+        job?.printer?.id ||
+        process.env.REACT_APP_PRINTER_ID ||
+        "prusa-core-one";
+      const jid = job?.id ?? job?.job_id ?? job?.jobId;
+      if (!jid) throw new Error("Missing job id");
+      await api.queue.cancel(printerId, jid);
+    },
+    [api]
+  );
 
   const handleConfirmCancel = async () => {
     if (!confirmJob) return;
@@ -58,7 +63,7 @@ export default function PrintingPage({
       if (typeof onCancelJob === "function") {
         await onCancelJob(confirmJob.id); // parent refresh ให้
       } else {
-        await cancelViaApi(confirmJob);   // fallback ยิงเอง
+        await cancelViaApi(confirmJob); // fallback ยิงเอง
       }
     } catch {
       // เงียบ ๆ
@@ -132,9 +137,18 @@ export default function PrintingPage({
     return undefined;
   };
 
+  // ===================== Local view of jobs (for drag & drop) =====================
+  // ทำงานบนอาร์เรย์ในหน้า (optimistic) แล้วค่อย sync กับ parent
+  const [localJobs, setLocalJobs] = useState(jobs);
+  useEffect(() => setLocalJobs(jobs), [jobs]);
+
+  // ใช้ localJobs ในการ render เสมอ
+  const viewJobs = localJobs;
+
+  // ใช้หา index ของแถวที่กำลัง Processing จากลำดับปัจจุบัน (หลัง reorder)
   const processingIndex = useMemo(
-    () => jobs.findIndex((j) => j.status === "processing"),
-    [jobs]
+    () => localJobs.findIndex((j) => j.status === "processing"),
+    [localJobs]
   );
 
   const FINAL_STATUSES = new Set(["completed", "failed", "canceled"]);
@@ -149,15 +163,20 @@ export default function PrintingPage({
     }
 
     // (2) เวลาที่เหลือจาก BE (หน่วยนาที)
-    if (j?.remaining_min != null) return Math.max(0, Math.floor(j.remaining_min * 60));
-    if (j?.remainingMin != null)  return Math.max(0, Math.floor(j.remainingMin  * 60));
+    if (j?.remaining_min != null)
+      return Math.max(0, Math.floor(j.remaining_min * 60));
+    if (j?.remainingMin != null)
+      return Math.max(0, Math.floor(j.remainingMin * 60));
 
     // (3) คำนวณเองจากเวลาเริ่มและ time_min
-    const totalMin  = j?.time_min ?? j?.durationMin ?? 0;
+    const totalMin = j?.time_min ?? j?.durationMin ?? 0;
     const startedMs = getStartedMs(j);
 
     if (j?.status === "processing" && startedMs) {
-      const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+      const elapsed = Math.max(
+        0,
+        Math.floor((Date.now() - startedMs) / 1000)
+      );
       return Math.max(0, totalMin * 60 - elapsed);
     }
 
@@ -167,10 +186,10 @@ export default function PrintingPage({
 
   // เวลาที่ต้อง “รอจนจบแถวนี้” (รวมสะสมตั้งแต่หัวตารางถึง index นั้น)
   const waitingOrRemainingOf = (index) => {
-    if (!jobs[index]) return "—";
+    if (!viewJobs[index]) return "—";
     let totalSec = 0;
     for (let i = 0; i <= index; i++) {
-      const j = jobs[i];
+      const j = viewJobs[i];
       if (!j || FINAL_STATUSES.has(j.status)) continue;
       const isProcRow = i === processingIndex && j.status === "processing";
       totalSec += remainingSecondsForJob(j, isProcRow);
@@ -200,44 +219,77 @@ export default function PrintingPage({
 
   const statusText = (s) => {
     switch (s) {
-      case "processing": return "Processing";
-      case "paused":     return "Paused";
-      case "queued":     return "Next in line";
-      case "completed":  return "Completed";
-      case "failed":     return "Failed";
-      case "canceled":   return "Canceled";
-      default:           return s || "—";
+      case "processing":
+        return "Processing";
+      case "paused":
+        return "Paused";
+      case "queued":
+        return "Next in line";
+      case "completed":
+        return "Completed";
+      case "failed":
+        return "Failed";
+      case "canceled":
+        return "Canceled";
+      default:
+        return s || "—";
     }
   };
 
   const statusClassName = (s) => {
     if (s === "processing") return "status processing";
-    if (s === "paused")     return "status paused";
-    if (s === "queued")     return "status next";
-    if (s === "completed")  return "status done";
-    if (s === "failed")     return "status failed";
-    if (s === "canceled")   return "status canceled";
+    if (s === "paused") return "status paused";
+    if (s === "queued") return "status next";
+    if (s === "completed") return "status done";
+    if (s === "failed") return "status failed";
+    if (s === "canceled") return "status canceled";
     return "status";
   };
 
-  // เจ้าของงาน (แสดงใต้ชื่อ)
-  const ownerOf = (job) =>
-    job?.ownerName ??
-    job?.employee_name ??
-    job?.uploader_name ??
-    job?.uploadedByName ??
-    job?.employee_id ??
-    "";
+  // เจ้าของงานที่โชว์ใต้คำว่า by ...
+  // ✅ ถ้ามี requested_by_name / requestedByName / requester_name → ถือว่า “คนสั่งพิมพ์”
+  //    แล้วโชว์ชื่อนั้นก่อน จากนั้นค่อย fallback ไปที่ owner / employee_name ตามเดิม
+  const ownerOf = (job) => {
+    const requesterName =
+      job?.requested_by_name ??
+      job?.requestedByName ??
+      job?.requester_name ??
+      job?.requesterName ??
+      null;
+
+    if (requesterName) return requesterName;
+
+    return (
+      job?.ownerName ??
+      job?.employee_name ??
+      job?.uploader_name ??
+      job?.uploadedByName ??
+      job?.employee_id ??
+      ""
+    );
+  };
 
   // สิทธิ์ยกเลิก — ถ้า BE ส่ง me_can_cancel มาก็เชื่อมันก่อน
   const canCancelJob = (job, isProcessing) => {
     if (typeof job?.me_can_cancel === "boolean") return job.me_can_cancel;
 
-    // fallback: ยกเลิกได้ถ้าเป็นของเราเอง และไม่ใช่แถวกำลังพิมพ์ และยังไม่จบ
+    // ✅ fallback: ใช้ "คนสั่งพิมพ์" เป็นเจ้าของคิวหลัก
     const uid = String(currentUserId ?? "");
+
+    const requesterId =
+      job?.requested_by_employee_id ??
+      job?.requestedByEmployeeId ??
+      job?.requested_by ??
+      job?.requestedBy ??
+      job?.uploadedBy ??
+      null;
+
+    const ownerId = job?.employee_id ?? null;
+
     const isMine =
-      (!!uid && String(job?.uploadedBy ?? "") === uid) ||
-      (!!uid && String(job?.employee_id ?? "") === uid);
+      (!!uid && String(requesterId ?? "") === uid) ||
+      (!!uid && String(ownerId ?? "") === uid);
+
     const isFinal = ["completed", "failed", "canceled"].includes(job?.status);
     return isMine && !isProcessing && !isFinal;
   };
@@ -249,18 +301,35 @@ export default function PrintingPage({
       const p = String(path || "");
       const origin =
         (typeof window !== "undefined" && window.location?.origin) || "";
-      return new URL(p, b ? (b.endsWith("/") ? b : b + "/") : origin + "/").toString();
-    } catch { return path; }
+      return new URL(
+        p,
+        b ? (b.endsWith("/") ? b : b + "/") : origin + "/"
+      ).toString();
+    } catch {
+      return path;
+    }
   }
   function withToken(u, tkn) {
     if (!tkn) return u;
-    try { const url = new URL(u); url.searchParams.set("token", tkn); return url.toString(); }
-    catch { const sep = u.includes("?") ? "&" : "?"; return `${u}${sep}token=${encodeURIComponent(tkn)}`; }
+    try {
+      const url = new URL(u);
+      url.searchParams.set("token", tkn);
+      return url.toString();
+    } catch {
+      const sep = u.includes("?") ? "&" : "?";
+      return `${u}${sep}token=${encodeURIComponent(tkn)}`;
+    }
   }
   // NEW: เติม cache-buster เพื่อเคลียร์ 404 ที่เพิ่งสร้างไฟล์/รีเฟรช
   function addCacheParam(u, tag) {
-    try { const url = new URL(u); url.searchParams.set("t", String(tag ?? Date.now())); return url.toString(); }
-    catch { const sep = u.includes("?") ? "&" : "?"; return `${u}${sep}t=${encodeURIComponent(tag ?? Date.now())}`; }
+    try {
+      const url = new URL(u);
+      url.searchParams.set("t", String(tag ?? Date.now()));
+      return url.toString();
+    } catch {
+      const sep = u.includes("?") ? "&" : "?";
+      return `${u}${sep}t=${encodeURIComponent(tag ?? Date.now())}`;
+    }
   }
   function toRawUrl(objectKey, cacheTag) {
     const path = `/files/raw?object_key=${encodeURIComponent(objectKey)}`;
@@ -284,7 +353,7 @@ export default function PrintingPage({
   // NEW: ตัดสินว่างานนี้ “ควรใช้ MinIO ก่อน” ไหม (Custom Storage / User History)
   function fromMinioOrHistory(job) {
     const src = (job?.source || "").toLowerCase();
-    const gk  = job?.gcode_key || job?.gcode_path || "";
+    const gk = job?.gcode_key || job?.gcode_path || "";
     return (
       isObjectKey(gk) ||
       src === "storage" ||
@@ -307,22 +376,29 @@ export default function PrintingPage({
       }
       // ตาม gcode_key / original_key
       if (job?.gcode_key) {
-        const byG = localStorage.getItem(`queueThumbByGcode:${job.gcode_key}`);
+        const byG = localStorage.getItem(
+          `queueThumbByGcode:${job.gcode_key}`
+        );
         if (byG && startsWithImage(byG)) return byG;
       }
       if (job?.original_key) {
-        const byO = localStorage.getItem(`queueThumbByOrig:${job.original_key}`);
+        const byO = localStorage.getItem(
+          `queueThumbByOrig:${job.original_key}`
+        );
         if (byO && startsWithImage(byO)) return byO;
       }
       // ตามชื่อ (ก่อนรู้ id ทันทีหลังกด Confirm)
       if (job?.name) {
-        const byName = localStorage.getItem(`queueThumbByName:${job.name}`);
+        const byName = localStorage.getItem(
+          `queueThumbByName:${job.name}`
+        );
         if (byName && startsWithImage(byName)) return byName;
       }
     } catch {}
     return null;
   }
-  const startsWithImage = (s) => typeof s === "string" && s.startsWith("data:image/");
+  const startsWithImage = (s) =>
+    typeof s === "string" && s.startsWith("data:image/");
 
   // ดึงรูป preview สำหรับตาราง
   // ปรับลำดับชัดเจน:
@@ -330,11 +406,20 @@ export default function PrintingPage({
   // (B) งานทั่วไป → เดิม แต่ fallback เป็น NO_IMAGE_URL
   const pickPreview = (job) => {
     const cacheTag =
-      job?.updated_at || job?.uploaded_at || job?.created_at || job?.started_at || job?.id || Date.now();
+      job?.updated_at ||
+      job?.uploaded_at ||
+      job?.created_at ||
+      job?.started_at ||
+      job?.id ||
+      Date.now();
 
     if (fromMinioOrHistory(job)) {
       // 1) preview_key เป็น object key → /files/raw
-      if (job?.preview_key && isObjectKey(job.preview_key) && /\.preview\.png$/i.test(job.preview_key)) {
+      if (
+        job?.preview_key &&
+        isObjectKey(job.preview_key) &&
+        /\.preview\.png$/i.test(job.preview_key)
+      ) {
         return toRawUrl(job.preview_key, cacheTag);
       }
       // 2) เดาจาก gcode_key/path → *.preview.png → /files/raw
@@ -344,7 +429,12 @@ export default function PrintingPage({
         if (pk) return toRawUrl(pk, cacheTag);
       }
       // 3) thumb เป็น HTTP/presigned → ใช้ไปก่อน
-      const t = job?.thumb || job?.thumbnail || job?.thumbnail_url || job?.previewUrl || "";
+      const t =
+        job?.thumb ||
+        job?.thumbnail ||
+        job?.thumbnail_url ||
+        job?.previewUrl ||
+        "";
       if (isHttpUrl(t)) return t;
 
       // 4) ไม่พบใน MinIO → ค่อย fallback snapshot (ถ้ามี)
@@ -385,61 +475,75 @@ export default function PrintingPage({
 
   /* ===================== Drag & Drop Reorder (manager) ===================== */
 
-  // ทำงานบนอาร์เรย์ในหน้า (optimistic) แล้วค่อยยิง API reorder
-  const [localJobs, setLocalJobs] = useState(jobs);
-  useEffect(() => setLocalJobs(jobs), [jobs]);
-
   // index ที่ลากอยู่
   const [dragIndex, setDragIndex] = useState(null);
 
-  const isReorderable = (j) => j && (j.status === "queued" || j.status === "paused");
-  const isProcessingRow = (idx) => idx === processingIndex && localJobs[idx]?.status === "processing";
+  const isReorderable = (j) =>
+    j && (j.status === "queued" || j.status === "paused");
+  const isProcessingRow = (idx) =>
+    idx === processingIndex &&
+    viewJobs[idx] &&
+    viewJobs[idx].status === "processing";
 
   const printerIdForQueue = useMemo(() => {
     return (
-      localJobs?.[0]?.printer_id ||
-      localJobs?.[0]?.printerId ||
-      localJobs?.[0]?.printer?.id ||
+      viewJobs?.[0]?.printer_id ||
+      viewJobs?.[0]?.printerId ||
+      viewJobs?.[0]?.printer?.id ||
       process.env.REACT_APP_PRINTER_ID ||
       "prusa-core-one"
     );
-  }, [localJobs]);
+  }, [viewJobs]);
 
   // เรียก backend ส่งเฉพาะ job ids ที่สลับได้ (queued/paused)
-  const callReorderApi = useCallback(async (orderedJobs) => {
-    const ids = orderedJobs
-      .filter(isReorderable)
-      .map((j) => j.id)
-      .filter((x) => x != null);
+  const callReorderApi = useCallback(
+    async (orderedJobs) => {
+      const ids = orderedJobs
+        .filter(isReorderable)
+        .map((j) => j.id)
+        .filter((x) => x != null);
 
-    if (ids.length === 0) return;
+      if (ids.length === 0) return;
 
-    try {
-      if (api?.queue?.reorder) {
-        await api.queue.reorder(printerIdForQueue, ids);
-      } else {
-        await api.post(`/printers/${encodeURIComponent(printerIdForQueue)}/queue/reorder`, { job_ids: ids });
-      }
-      // success → ไม่ต้องทำอะไรเพิ่ม รอ parent refresh/หรือ state local ใช้ต่อได้
-    } catch (e) {
-      // ถ้าพลาด → กลับไปลำดับเดิม
-      setLocalJobs(jobs);
       try {
-        window.dispatchEvent(new CustomEvent("toast", { detail: { type: "error", text: "Reorder failed" } }));
-      } catch {}
-    }
-  }, [api, printerIdForQueue, jobs]);
+        if (api?.queue?.reorder) {
+          await api.queue.reorder(printerIdForQueue, ids);
+        } else {
+          await api.post(
+            `/printers/${encodeURIComponent(
+              printerIdForQueue
+            )}/queue/reorder`,
+            { job_ids: ids }
+          );
+        }
+        // success → ไม่ต้องทำอะไรเพิ่ม รอ parent refresh/หรือ state local ใช้ต่อได้
+      } catch (e) {
+        // ถ้าพลาด → กลับไปลำดับเดิม
+        setLocalJobs(jobs);
+        try {
+          window.dispatchEvent(
+            new CustomEvent("toast", {
+              detail: { type: "error", text: "Reorder failed" },
+            })
+          );
+        } catch {}
+      }
+    },
+    [api, printerIdForQueue, jobs]
+  );
 
   const onDragStart = (e, idx) => {
-    if (!isReorderable(localJobs[idx])) return;
+    if (!isReorderable(viewJobs[idx])) return;
     setDragIndex(idx);
     e.dataTransfer.effectAllowed = "move";
-    try { e.dataTransfer.setData("text/plain", String(localJobs[idx].id)); } catch {}
+    try {
+      e.dataTransfer.setData("text/plain", String(viewJobs[idx].id));
+    } catch {}
   };
 
   const onDragOver = (e, idx) => {
     if (dragIndex == null) return;
-    if (!isReorderable(localJobs[dragIndex])) return;
+    if (!isReorderable(viewJobs[dragIndex])) return;
     // ห้าม drop ทับแถว Processing
     if (isProcessingRow(idx)) return;
     e.preventDefault();
@@ -451,13 +555,19 @@ export default function PrintingPage({
     if (dragIndex == null) return;
 
     // ถ้าเป้าหมายเป็น processing → ไม่ทำ
-    if (isProcessingRow(idx)) { setDragIndex(null); return; }
+    if (isProcessingRow(idx)) {
+      setDragIndex(null);
+      return;
+    }
 
     // ห้ามย้าย "processing" เอง (แต่เราไม่ให้ลากตั้งแต่แรกแล้ว)
-    if (!isReorderable(localJobs[dragIndex])) { setDragIndex(null); return; }
+    if (!isReorderable(viewJobs[dragIndex])) {
+      setDragIndex(null);
+      return;
+    }
 
     // คัดลอกแล้วสลับ
-    const next = localJobs.slice();
+    const next = viewJobs.slice();
     const [moved] = next.splice(dragIndex, 1);
 
     // ถ้ามี processing อยู่หัวตาราง ให้กัน index 0 ไว้ (ห้าม drop ก่อนมัน)
@@ -473,9 +583,6 @@ export default function PrintingPage({
   };
 
   const onDragEnd = () => setDragIndex(null);
-
-  // ใช้ localJobs แสดงผล (optimistic)
-  const viewJobs = localJobs;
 
   /* ===================== /Drag & Drop Reorder ============================== */
 
@@ -495,24 +602,43 @@ export default function PrintingPage({
           {viewJobs.length === 0 && (
             <tr>
               <td colSpan={4} style={{ padding: "24px", color: "#667" }}>
-                No print jobs yet. Use <strong>+ Print file</strong> or reprint from Storage/History.
+                No print jobs yet. Use <strong>+ Print file</strong> or
+                reprint from Storage/History.
               </td>
             </tr>
           )}
 
           {viewJobs.map((job, idx) => {
-            const isProcessing = idx === processingIndex && job.status === "processing";
+            const isProcessing =
+              idx === processingIndex && job.status === "processing";
             const canCancel = canCancelJob(job, isProcessing);
             const cancelBtnClass = "btn-cancel" + (canCancel ? " red" : "");
-            const isMine = (job?.uploadedBy === currentUserId || job?.employee_id === currentUserId);
-            const isHighlight = highlightId != null && String(job.id) === String(highlightId);
+            const uidStr = String(currentUserId ?? "");
+            const requesterId =
+              job?.requested_by_employee_id ??
+              job?.requestedByEmployeeId ??
+              job?.requested_by ??
+              job?.requestedBy ??
+              job?.uploadedBy ??
+              null;
+            const ownerId = job?.employee_id ?? null;
+            const isMine =
+              (!!uidStr && String(requesterId ?? "") === uidStr) ||
+              (!!uidStr && String(ownerId ?? "") === uidStr);
+
+            const isHighlight =
+              highlightId != null && String(job.id) === String(highlightId);
             const imgSrc = pickPreview(job);
 
             // drag state / class
             const draggable = isReorderable(job); // queued/paused เท่านั้น
             const rowClass =
-              `${isMine ? "row-own" : ""} ${isHighlight ? "just-queued" : ""} ` +
-              `${draggable ? "can-drag" : ""} ${isProcessing ? "lock-proc" : ""}`;
+              `${isMine ? "row-own" : ""} ${
+                isHighlight ? "just-queued" : ""
+              } ` +
+              `${draggable ? "can-drag" : ""} ${
+                isProcessing ? "lock-proc" : ""
+              }`;
 
             return (
               <tr
@@ -529,8 +655,8 @@ export default function PrintingPage({
                   isProcessing
                     ? "Processing jobs cannot be reordered. Pause or Cancel first."
                     : draggable
-                      ? "Drag to reorder"
-                      : "Finished jobs are not in the active queue"
+                    ? "Drag to reorder"
+                    : "Finished jobs are not in the active queue"
                 }
                 style={draggable ? { cursor: "grab" } : undefined}
               >
@@ -542,16 +668,36 @@ export default function PrintingPage({
                       alt="part"
                       className="part-img"
                       onError={onImgError}
-                      style={{ width: 64, height: 64, borderRadius: 10, flex: "0 0 auto", objectFit: "cover" }}
+                      style={{
+                        width: 64,
+                        height: 64,
+                        borderRadius: 10,
+                        flex: "0 0 auto",
+                        objectFit: "cover",
+                      }}
                     />
 
                     <div className="part-meta">
                       {isMine && (
-                        <div className="your-queue" id={`yq-${job.id}`}>Your Queue</div>
+                        <div className="your-queue" id={`yq-${job.id}`}>
+                          Your Queue
+                        </div>
                       )}
                       <div className="part-id">{pad3(idx + 1)}</div>
-                      <div className="part-name" title={job?.name || ""}>{stripExt(job?.name)}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, marginTop: 2 }}>
+                      <div
+                        className="part-name"
+                        title={job?.name || ""}
+                      >
+                        {stripExt(job?.name)}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#6b7280",
+                          fontWeight: 600,
+                          marginTop: 2,
+                        }}
+                      >
                         by {String(ownerOf(job))}
                       </div>
                     </div>
@@ -559,7 +705,10 @@ export default function PrintingPage({
                 </td>
 
                 <td>
-                  <span className={statusClassName(job.status)} aria-live="polite">
+                  <span
+                    className={statusClassName(job.status)}
+                    aria-live="polite"
+                  >
                     {statusText(job.status)}
                   </span>
                 </td>
@@ -571,18 +720,26 @@ export default function PrintingPage({
                 <td className="td-right">
                   <button
                     className={cancelBtnClass}
-                    onClick={() => { if (canCancel) openConfirm(job); }}
+                    onClick={() => {
+                      if (canCancel) openConfirm(job);
+                    }}
                     disabled={!canCancel}
                     aria-disabled={!canCancel}
-                    aria-label={canCancel ? "Cancel this job" : "You cannot cancel this job"}
+                    aria-label={
+                      canCancel
+                        ? "Cancel this job"
+                        : "You cannot cancel this job"
+                    }
                     title={
                       canCancel
                         ? "Cancel this job"
                         : isProcessing
-                          ? "Cannot cancel while processing"
-                          : ["completed","failed","canceled"].includes(job.status)
-                            ? "This job has already finished"
-                            : "You can cancel only your own job"
+                        ? "Cannot cancel while processing"
+                        : ["completed", "failed", "canceled"].includes(
+                            job.status
+                          )
+                        ? "This job has already finished"
+                        : "You can cancel only your own job"
                     }
                   >
                     Cancel
@@ -605,10 +762,24 @@ export default function PrintingPage({
         + Print file
       </button>
 
-      {fabOpen && <div className="fab-scrim" onClick={() => setFabOpen(false)} />}
       {fabOpen && (
-        <div className="fab-menu" role="menu" onClick={(e) => e.stopPropagation()}>
-          <button type="button" className="fab-item" role="menuitem" onClick={openUploadSafely}>
+        <div
+          className="fab-scrim"
+          onClick={() => setFabOpen(false)}
+        />
+      )}
+      {fabOpen && (
+        <div
+          className="fab-menu"
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="fab-item"
+            role="menuitem"
+            onClick={openUploadSafely}
+          >
             Upload File
           </button>
 
@@ -618,14 +789,22 @@ export default function PrintingPage({
             type="button"
             className="fab-item"
             role="menuitem"
-            onClick={() => { setShowHistory(true); setFabOpen(false); }}
+            onClick={() => {
+              setShowHistory(true);
+              setFabOpen(false);
+            }}
           >
             Print History
           </button>
 
           <div className="fab-sep" aria-hidden />
 
-          <button type="button" className="fab-item" role="menuitem" onClick={goStorageSafely}>
+          <button
+            type="button"
+            className="fab-item"
+            role="menuitem"
+            onClick={goStorageSafely}
+          >
             Custom Storage
           </button>
         </div>
@@ -654,10 +833,20 @@ export default function PrintingPage({
           aria-labelledby="confirm-cancel-title"
           onClick={closeConfirm}
         >
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3 id="confirm-cancel-title">Confirm to cancel this queue?</h3>
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="confirm-cancel-title">
+              Confirm to cancel this queue?
+            </h3>
             <div className="modal-actions">
-              <button type="button" className="btn-outline" onClick={closeConfirm} disabled={confirmBusy}>
+              <button
+                type="button"
+                className="btn-outline"
+                onClick={closeConfirm}
+                disabled={confirmBusy}
+              >
                 Go Back
               </button>
               <button

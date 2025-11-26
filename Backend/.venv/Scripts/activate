@@ -14,9 +14,14 @@ deactivate () {
         unset _OLD_VIRTUAL_PYTHONHOME
     fi
 
+<<<<<<< Updated upstream
     # Call hash to forget past locations. Without forgetting
     # past locations the $PATH changes we made may not be respected.
     # See "man bash" for more details. hash is usually a builtin of your shell
+=======
+    # Call hash to forget past commands. Without forgetting
+    # past commands the $PATH changes we made may not be respected
+>>>>>>> Stashed changes
     hash -r 2> /dev/null
 
     if [ -n "${_OLD_VIRTUAL_PS1:-}" ] ; then
@@ -37,6 +42,7 @@ deactivate () {
 deactivate nondestructive
 
 # on Windows, a path can contain colons and backslashes and has to be converted:
+<<<<<<< Updated upstream
 case "$(uname)" in
     CYGWIN*|MSYS*|MINGW*)
         # transform D:\path\to\venv to /d/path/to/venv on MSYS and MINGW
@@ -49,6 +55,16 @@ case "$(uname)" in
         export VIRTUAL_ENV='C:\Users\naamo\OneDrive - King Mongkut’s University of Technology Thonburi (KMUTT)\Desktop\WilProject\WilProject_MR3DPrinter\Backend\.venv'
         ;;
 esac
+=======
+if [ "${OSTYPE:-}" = "cygwin" ] || [ "${OSTYPE:-}" = "msys" ] ; then
+    # transform D:\path\to\venv to /d/path/to/venv on MSYS
+    # and to /cygdrive/d/path/to/venv on Cygwin
+    export VIRTUAL_ENV=$(cygpath "C:\Users\Adi_m\OneDrive\Desktop\MR3DPrinter\WilProject_MR3DPrinter\Backend\.venv")
+else
+    # use the path as-is
+    export VIRTUAL_ENV="C:\Users\Adi_m\OneDrive\Desktop\MR3DPrinter\WilProject_MR3DPrinter\Backend\.venv"
+fi
+>>>>>>> Stashed changes
 
 _OLD_VIRTUAL_PATH="$PATH"
 PATH="$VIRTUAL_ENV/"Scripts":$PATH"

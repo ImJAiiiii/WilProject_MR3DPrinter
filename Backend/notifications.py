@@ -18,6 +18,7 @@ from schemas import NotificationOut, NotificationCreate, NotificationMarkRead
 from auth import get_user_from_header_or_query  # covers Header / ?token=
 from emailer import send_notification_email
 from teams_flow_webhook import notify_dm
+from models import LatencyLog
 
 # =============================================================================
 # Logger
@@ -258,6 +259,7 @@ def _norm_severity_from_type(t: str, sev_in: Optional[str]) -> str:
         "print.failed":    "error",
         "print.paused":    "warning",
         "print.canceled":  "warning",
+        "print.issue":     "error",
     }.get(t, "info")
 
 # === NEW: normalize severity when reading old rows from DB ====================
@@ -366,6 +368,19 @@ def _json(data: dict) -> str:
 
 def _emp(x: Optional[str]) -> str:
     return str(x or "").trim()
+
+# 👇 NEW: helper เลือก "คนที่ควรโดนแจ้งเตือน" จากงานพิมพ์
+def _primary_emp_from_job(job: PrintJob) -> str:
+    """
+    ใช้ requested_by_employee_id เป็นหลัก (คนที่กดสั่งพิมพ์จริง)
+    ถ้าไม่มี → fallback เป็น employee_id (เจ้าของไฟล์ / คนสร้างงาน)
+    """
+    try:
+        requested = _emp(getattr(job, "requested_by_employee_id", None))
+    except Exception:
+        requested = ""
+    owner = _emp(getattr(job, "employee_id", None))
+    return requested or owner
 
 def _to_out(n: Notification, read_at: Optional[datetime]) -> NotificationOut:
     # ✅ ป้องกันข้อมูลเก่าใน DB ที่มี severity แปลก ๆ (เช่น "neutral") ทำให้ Pydantic ล้ม
@@ -792,7 +807,8 @@ async def notify_job_event(
 
     job: PrintJob = job_or_payload  # type: ignore[assignment]
     status = _canon_status((status_or_mode or "").strip().lower())
-    recipient = _emp(getattr(job, "requested_by_employee_id", None)) or _emp(job.employee_id)
+    # 👇 ใช้ primary recipient จาก requested_by → fallback employee_id
+    recipient = _primary_emp_from_job(job)
 
     type_str = _canon_type(f"print.{status}" if status else "print.issue", status)
     if title is None:
@@ -1025,7 +1041,11 @@ def _clear_pending(printer_id: str, clsname: str): _PENDING_ISSUES.pop(_pend_key
 def _check_confirm(st: dict) -> tuple[bool, float]:
     dt = st["last_ts"] - st["first_ts"]; hits = st["hits"]
     mean_conf = (st["sum_conf"]/hits) if hits>0 else 0.0
-    return (dt >= DETECT_CONFIRM_WINDOW_SEC and hits >= DETECT_CONFIRM_MIN_HITS and mean_conf >= DETECT_CONFIRM_MIN_MEAN_CONF), mean_conf
+    return (
+        dt >= DETECT_CONFIRM_WINDOW_SEC
+        and hits >= DETECT_CONFIRM_MIN_HITS
+        and mean_conf >= DETECT_CONFIRM_MIN_MEAN_CONF
+    ), mean_conf
 
 def _gc_pending():
     cutoff = datetime.utcnow().timestamp() - (2.0 * max(1.0, DETECT_CONFIRM_WINDOW_SEC))
@@ -1195,12 +1215,18 @@ def _parse_employees_csv(s: str | None) -> list[str]:
 DEFAULT_ALERT_RECIPIENTS: list[str] = _parse_employees_csv(os.getenv("ALERT_DEFAULT_EMPLOYEES"))
 
 def _find_active_owner(db: Session, printer_id: str) -> Optional[str]:
+    """
+    ตอนนี้ตีความว่า 'owner' = คนที่ควรถูกแจ้งเตือนหลักของงานบนเตียง
+    (requested_by_employee_id ถ้ามี, ถ้าไม่มีค่อย fallback employee_id)
+    """
     pid = (printer_id or DEFAULT_PRINTER_ID or "-").strip().lower()
     job = (db.query(PrintJob)
              .filter(PrintJob.printer_id == pid, PrintJob.status.in_(("processing","printing","paused")))
              .order_by(PrintJob.started_at.desc().nullslast(), PrintJob.id.desc())
              .first())
-    return (job.employee_id or "").strip() if job else None
+    if not job:
+        return None
+    return _primary_emp_from_job(job)
 
 def _normalize_recipients(recipients: list[str] | None) -> list[str]:
     return [ (r or "").strip() for r in (recipients or []) if (r or "").strip() ]
@@ -1364,10 +1390,44 @@ async def ingest_detect_alert(
 
     log.info("[ALERT] recv %s", payload.model_dump_json(indent=0))
 
+    # ===== LATENCY: camera -> backend ingest =====
+    try:
+        src_ts = float(payload.ts or 0.0)             # เวลา ณ RasPi (ts จาก detect_stream)
+    except Exception:
+        src_ts = 0.0
+
+    now_ts = datetime.utcnow().timestamp()            # เวลา ณ backend ตอนรับ request
+    lat_cam_to_backend = max(0.0, now_ts - src_ts) if src_ts > 0 else 0.0
+
+    # confidence ไว้ใช้ทั้ง log latency + ด้านล่าง
+    conf = float(payload.confidence or 0.0)
+
+    # --- เก็บ log latency กล้อง -> backend ลง DB ---
+    if src_ts > 0:
+        _log_latency_row(
+            db,
+            channel="backend",
+            path="/notifications/alerts",
+            t_send_epoch=src_ts,
+            note=(
+                f"event={payload.event} "
+                f"printer={(payload.printer_id or '-')} "
+                f"cls={(payload.detected_class or '?')} "
+                f"conf={conf:.2f}"
+            ),
+        )
+
+    log.info(
+        "[LAT] ingest printer=%s event=%s cls=%s lat_cam_to_backend=%.3fs",
+        (payload.printer_id or DEFAULT_PRINTER_ID or "-").strip().lower(),
+        payload.event,
+        (payload.detected_class or "?"),
+        lat_cam_to_backend,
+    )
+
     printer_id = (payload.printer_id or DEFAULT_PRINTER_ID or "-").strip().lower()
     clsname_raw = payload.detected_class or ""
     clsname = _norm_cls(clsname_raw)
-    conf = float(payload.confidence or 0.0)
     event = "issue_cleared" if payload.event == "issue_resolved" else payload.event
 
     base = {
@@ -1376,7 +1436,10 @@ async def ingest_detect_alert(
         "image_url": payload.image_url, "video_url": payload.video_url,
         "boxes": payload.boxes, "image_w": payload.image_w, "image_h": payload.image_h,
         "source": payload.source,
+        # NEW: latency (camera -> backend ingest)
+        "lat_cam_to_backend": round(lat_cam_to_backend, 3),
     }
+
     _push_detect(base); _spawn(detect_broker.publish, base)
 
     # bed_empty / bed_occupied (internal only; no user DM)
@@ -1395,9 +1458,9 @@ async def ingest_detect_alert(
 
             if state not in ("printing","paused"):
                 _ = await _call_internal(
-                f"/internal/printers/{printer_id}/queue/process-next?force=1",
-                reason="bed_empty"
-            )
+                    f"/internal/printers/{printer_id}/queue/process-next?force=1",
+                    reason="bed_empty"
+                )
 
             if BED_EMPTY_BROADCAST:
                 await _emit_printer_event(printer_id, {
@@ -1440,12 +1503,25 @@ async def ingest_detect_alert(
             })
             return {"ok": True, "skipped": "cleared for non-allowed class"}
 
-    # Debounce/confirm
+        # ==========================
+    # block debounce + latency
+    # ==========================
     if DETECT_CONFIRM_ENABLED and event in {"issue_started","issue_update"}:
         ts_now = _now_ts_fallback(payload.ts)
         st = _add_pending_hit(printer_id, clsname, ts=ts_now, conf=conf, payload=payload.model_dump())
         _gc_pending()
         confirmed, mean_conf = _check_confirm(st)
+
+        # ===== LATENCY: debounce window (hit แรก -> ยืนยัน) =====
+        first_ts = st.get("first_ts", ts_now)
+        confirm_latency = max(0.0, ts_now - first_ts)
+        log.info(
+            "[LAT] debounce printer=%s cls=%s hits=%d mean_conf=%.3f "
+            "window=%.1fs confirm_latency=%.3fs confirmed=%s",
+            printer_id, clsname, st["hits"], mean_conf,
+            DETECT_CONFIRM_WINDOW_SEC, confirm_latency, confirmed,
+        )
+
         if not confirmed:
             await _emit_printer_event(printer_id, {
                 "event":"detector_buffering","printer_id":printer_id,
@@ -1461,10 +1537,19 @@ async def ingest_detect_alert(
     # Confirmed anomaly or cleared
     sev = payload.severity or _auto_severity(event, conf)
     title = {
-        "issue_started":"🛑 Anomaly detected",
-        "issue_update":"⚠️ Anomaly update",
-        "issue_cleared":"✅ Back to normal",
+        "issue_started":"Anomaly detected",
+        "issue_update":"Anomaly update",
+        "issue_cleared":"Back to normal",
     }[event]
+
+    # ===== LATENCY: camera -> emit issue_* event =====
+    now_ts2 = datetime.utcnow().timestamp()
+    lat_cam_to_emit = max(0.0, now_ts2 - src_ts) if src_ts > 0 else 0.0
+
+    log.info(
+        "[LAT] emit_issue printer=%s event=%s cls=%s lat_cam_to_backend=%.3fs lat_cam_to_emit=%.3fs",
+        printer_id, event, clsname, lat_cam_to_backend, lat_cam_to_emit,
+    )
 
     # เติมข้อมูลงานที่อยู่บนเตียงให้การ์ด/DM
     job_on_bed = _find_active_job(db, printer_id)
@@ -1492,9 +1577,11 @@ async def ingest_detect_alert(
     # NEW: explicit reason fields
     data["reason"] = clsname
     data["reason_label"] = reason_txt
+    # NEW: latency fields
+    data["lat_cam_to_backend"] = round(lat_cam_to_backend, 3)
+    data["lat_cam_to_emit"] = round(lat_cam_to_emit, 3)
 
     # auto-pause
-    paused_owner: Optional[str] = None
     if AUTO_PAUSE:
         allow_event = event in PAUSE_ON_EVENTS
         allow_class = clsname in PAUSE_ON_CLASSES
@@ -1505,7 +1592,7 @@ async def ingest_detect_alert(
             await _pause_octoprint()
             job = _pause_current_job_in_db(db, printer_id)
             if job:
-                paused_owner = job.employee_id
+                primary_emp = _primary_emp_from_job(job)
                 # Holo/web panel + toast
                 await _emit_printer_event(printer_id, {
                     "event":"job_paused","printer_id":printer_id,"job_id":job.id,"name":job.name,
@@ -1528,7 +1615,7 @@ async def ingest_detect_alert(
                 }
                 _spawn(_panel_watchdog, printer_id, panel_payload, interval=12.0)
 
-                # แจ้งเจ้าของ: BOTH paused + issue (same reason)
+                # แจ้งเจ้าของจริง: BOTH paused + issue (same reason)
                 ev_paused = format_canonical_event(
                     type="print.paused", status="paused", severity="warning",
                     title="⏸️ Print paused (anomaly detected)",
@@ -1537,7 +1624,8 @@ async def ingest_detect_alert(
                     data={"job_id": job.id, "name": job.name, "detected_class": clsname, "confidence": conf,
                           "reason": clsname, "reason_label": reason_txt}
                 )
-                await emit_canonical_event(db, job.employee_id, ev_paused)
+                if primary_emp:
+                    await emit_canonical_event(db, primary_emp, ev_paused)
 
                 ev_issue_owner = format_canonical_event(
                     type="print.issue", status="issue", severity="critical",
@@ -1547,7 +1635,8 @@ async def ingest_detect_alert(
                     data={"job_id": job.id, "name": job.name, "detected_class": clsname, "confidence": conf,
                           "reason": clsname, "reason_label": reason_txt}
                 )
-                await emit_canonical_event(db, job.employee_id, ev_issue_owner)
+                if primary_emp:
+                    await emit_canonical_event(db, primary_emp, ev_issue_owner)
 
     # broadcast anomaly / cleared (ใส่ชื่อ/ไอดีงานด้วย)
     current_owner = _find_active_owner(db, printer_id)
@@ -1561,6 +1650,9 @@ async def ingest_detect_alert(
         "name": job_name or None,
         "job_id": job_id if job_id is not None else None,
         "reason": clsname, "reason_label": reason_txt,
+        # NEW: latency info to UI
+        "lat_cam_to_backend": round(lat_cam_to_backend, 3),
+        "lat_cam_to_emit": round(lat_cam_to_emit, 3),
     })
 
     # notify recipients -> ใช้ canonical event เดียวกัน
@@ -1600,8 +1692,10 @@ async def job_event(
     job: Optional[PrintJob] = db.query(PrintJob).filter(PrintJob.id == payload.job_id).first()
     if not job: raise HTTPException(status_code=404, detail="job_not_found")
 
-    owner = (job.employee_id or "").strip()
-    has_owner = bool(owner)
+    # คนที่ควรถูกแจ้งเตือน (requested_by → fallback employee_id)
+    primary_emp = _primary_emp_from_job(job)
+    has_primary = bool(primary_emp)
+    file_owner = (job.employee_id or "").strip()  # เก็บไว้เผื่อใช้ debug / data ต่อ
 
     printer_id = (payload.printer_id or job.printer_id or DEFAULT_PRINTER_ID or "-").strip().lower()
     title, base_sev = _status_title_severity(payload.status)
@@ -1640,24 +1734,24 @@ async def job_event(
     try: await _close_sticky_panel(printer_id, persist_key=f"pause-{printer_id}")
     except Exception: pass
 
-    if has_owner:
+    if has_primary:
         ev_owner = format_canonical_event(
             type=f"print.{ 'canceled' if payload.status=='cancelled' else payload.status }",
             status=('canceled' if payload.status=='cancelled' else payload.status),
             severity=base_sev, title=title, message=msg,
             printer_id=printer_id, data=data
         )
-        await emit_canonical_event(db, owner, ev_owner)
+        await emit_canonical_event(db, primary_emp, ev_owner)
 
     if payload.status == "completed":
         finished_at = payload.finished_at or job.finished_at or datetime.utcnow()
         _cancel_bed_watcher(printer_id)
         _BED_WATCHERS[printer_id] = asyncio.create_task(
-            _start_bed_timeout_watcher(printer_id, finished_at, owner if has_owner else None)
+            _start_bed_timeout_watcher(printer_id, finished_at, primary_emp if has_primary else None)
         )
 
     _mark_announced(printer_id, job.id, payload.status)
-    return {"ok": True, "owner": owner if has_owner else None, "status": payload.status}
+    return {"ok": True, "owner": primary_emp if has_primary else None, "status": payload.status}
 
 # =============================================================================
 # RECENT DETECTS: REST + SSE + simple view (debug/monitor)
@@ -1784,3 +1878,44 @@ def bed_status(printer_id: str, x_admin_token: str = Header(default="")):
         return {"ok": False, "reason": "no_bed_empty_seen"}
     age = (datetime.utcnow() - ts).total_seconds()
     return {"ok": True, "last_empty_ts": ts.timestamp(), "age_sec": age}
+
+# =============================================================================
+# LatencyLog helper (เก็บลง DB)
+# =============================================================================
+def _log_latency_row(
+    db: Session,
+    *,
+    channel: str,
+    path: str,
+    t_send_epoch: float,
+    note: str | None = None,
+) -> None:
+    """
+    บันทึก latency ง่าย ๆ ลง latency_logs
+    - ใช้ t_send_epoch (float epoch seconds) → แปลงเป็น DateTime(tz=UTC)
+    - t_recv = datetime.now(timezone.utc)
+    """
+    try:
+        if not t_send_epoch or t_send_epoch <= 0:
+            return
+
+        t_send = datetime.fromtimestamp(float(t_send_epoch), tz=timezone.utc)
+        t_recv = datetime.now(timezone.utc)
+        latency_ms = max(0.0, (t_recv - t_send).total_seconds() * 1000.0)
+
+        row = LatencyLog(
+            channel=(channel or "backend")[:32],
+            path=(path or "")[:255],
+            t_send=t_send,
+            t_recv=t_recv,
+            latency_ms=latency_ms,
+            note=(note or None)[:255] if note else None,
+        )
+        db.add(row)
+        db.commit()
+    except Exception:
+        log.exception("[LAT] failed to insert LatencyLog")
+        try:
+            db.rollback()
+        except Exception:
+            pass

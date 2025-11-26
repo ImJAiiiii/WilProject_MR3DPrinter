@@ -29,18 +29,36 @@ export default function VideoStream({
   state = "idle",
   job,
   queueNumber,
+<<<<<<< Updated upstream
   // ปรับความลื่น snapshot ได้ที่นี่
   targetFps = 15,
+=======
+  objectFit = "cover", // ให้เต็มเฟรมเลย
+  targetFps =
+    Number.isFinite(SNAPSHOT_FPS_ENV) && SNAPSHOT_FPS_ENV > 0
+      ? SNAPSHOT_FPS_ENV
+      : 8,
+>>>>>>> Stashed changes
   minFpsHidden = 3,
   // ปรับการยืดภาพหากต้องการ: "contain" | "cover"
   objectFit = "contain",
 }) {
+<<<<<<< Updated upstream
   /* ---------------- mode & urls ---------------- */
   const mode = useMemo(() => decideStreamMode(STREAM_URL, STREAM_MODE_ENV), [STREAM_URL, STREAM_MODE_ENV]);
+=======
+  // ---------- mode/url ----------
+  const streamUrl = STREAM_URL_RAW || "";
+  const mode = useMemo(
+    () => decideStreamMode(streamUrl, STREAM_MODE_ENV),
+    [streamUrl]
+  );
+>>>>>>> Stashed changes
   const isStreamMJPEG = mode === "mjpeg";
   const isStreamVideo = mode === "video";
   const useSnapshot = !STREAM_URL || mode === "snapshot";
 
+<<<<<<< Updated upstream
   const baseSnapshotUrl = useMemo(
     () =>
       DIRECT_SNAPSHOT ||
@@ -52,27 +70,62 @@ export default function VideoStream({
   const [isPlaying, setIsPlaying] = useState(true);
 
   /* ---------------- video mode ---------------- */
+=======
+  const baseSnapshotUrl = useMemo(() => {
+    if (DIRECT_SNAPSHOT_RAW && isSameSecureScheme(DIRECT_SNAPSHOT_RAW)) {
+      return DIRECT_SNAPSHOT_RAW;
+    }
+    if (DIRECT_SNAPSHOT_RAW && !isSameSecureScheme(DIRECT_SNAPSHOT_RAW)) {
+      setHint("Blocked mixed-content: fallback to backend proxy snapshot");
+    }
+    const base = (API_BASE || "").replace(/\/+$/, "");
+    return `${base}/printers/${encodeURIComponent(PRINTER_ID)}/snapshot`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const useSnapshot =
+    !streamUrl || (streamUrl && !isSameSecureScheme(streamUrl));
+
+  // ---------- states ----------
+  const [isPlaying, setIsPlaying] = useState(true);
+
+  // ---------- <video> ----------
+>>>>>>> Stashed changes
   const videoRef = useRef(null);
   useEffect(() => {
     if (!isStreamVideo) return;
     const el = videoRef.current;
     if (!el) return;
 
+<<<<<<< Updated upstream
     // reset ก่อนสลับโหมด/URL เพื่อกันเฟรมค้าง
+=======
+>>>>>>> Stashed changes
     try {
       el.pause();
       el.removeAttribute("src");
       el.load?.();
     } catch {}
 
+<<<<<<< Updated upstream
     el.src = STREAM_URL;
+=======
+    el.src = streamUrl;
+>>>>>>> Stashed changes
     el.muted = true;
     el.playsInline = true;
     el.preload = "none";
 
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
+<<<<<<< Updated upstream
     const onError = () => setIsPlaying(false);
+=======
+    const onError = () => {
+      setIsPlaying(false);
+      setHint("Stream error → snapshot fallback");
+    };
+>>>>>>> Stashed changes
 
     el.addEventListener("play", onPlay);
     el.addEventListener("pause", onPause);
@@ -98,19 +151,30 @@ export default function VideoStream({
     };
   }, [isStreamVideo, STREAM_URL]);
 
+<<<<<<< Updated upstream
   /* ---------------- mjpeg mode ---------------- */
   // mjpeg ใช้ <img src=STREAM_URL> ตรง ๆ ลื่นสุด (ไม่ยุ่ง canvas/blob)
 
   /* ---------------- snapshot (double buffer + adaptive FPS) ---------------- */
   const [snapSrc, setSnapSrc] = useState(""); // src ปัจจุบันที่แสดง
+=======
+  // ---------- Snapshot: double-buffer DOM (no React state per frame) ----------
+  const imgARef = useRef(null);
+  const imgBRef = useRef(null);
+  const [snapshotUnstable, setSnapshotUnstable] = useState(false);
+>>>>>>> Stashed changes
   const errCountRef = useRef(0);
   const runningRef = useRef(false);
   const lastCostRef = useRef(0);
 
   useEffect(() => {
     if (!useSnapshot) return;
-    runningRef.current = true;
 
+    runningRef.current = true;
+    errCountRef.current = 0;
+    setSnapshotUnstable(false);
+
+<<<<<<< Updated upstream
     const imgA = new Image();
     const imgB = new Image();
     let cur = imgA;
@@ -119,10 +183,36 @@ export default function VideoStream({
     // ให้ browser ทำงานข้าม-origin แบบนิ่ง ๆ ถ้า backend เปิด CORS รูปไว้
     cur.crossOrigin = "anonymous";
     nxt.crossOrigin = "anonymous";
+=======
+    let visible = "A"; // ตัวไหนโชว์อยู่ตอนนี้ ("A" หรือ "B")
+    let destroyed = false;
+    let timerId = null;
+>>>>>>> Stashed changes
+
+    const loader = new Image();
+    loader.crossOrigin = "anonymous";
+
+    const getVisibleImg = () =>
+      visible === "A" ? imgARef.current : imgBRef.current;
+    const getHiddenImg = () =>
+      visible === "A" ? imgBRef.current : imgARef.current;
+
+    const swapBuffers = () => {
+      const vis = getVisibleImg();
+      const hid = getHiddenImg();
+      if (!vis || !hid) return;
+      // cross-fade แบบง่าย: ตัวใหม่ขึ้น 1, ตัวเก่าเป็น 0
+      hid.style.opacity = "1";
+      vis.style.opacity = "0";
+      visible = visible === "A" ? "B" : "A";
+    };
 
     const makeUrl = () =>
-      `${baseSnapshotUrl}${baseSnapshotUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
+      `${baseSnapshotUrl}${
+        baseSnapshotUrl.includes("?") ? "&" : "?"
+      }t=${Date.now()}`;
 
+<<<<<<< Updated upstream
     const schedule = (costMs) => {
       lastCostRef.current = costMs;
 
@@ -179,16 +269,69 @@ export default function VideoStream({
 
     // เริ่ม
     if (isPlaying) requestAnimationFrame(tick);
+=======
+    const schedule = (delayMs) => {
+      timerId = setTimeout(() => {
+        if (runningRef.current && !destroyed) {
+          requestAnimationFrame(tick);
+        }
+      }, delayMs);
+    };
+
+    const tick = () => {
+      if (!runningRef.current || destroyed || !isPlaying) return;
+
+      const hidden =
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden";
+      const wantFps = hidden
+        ? Math.max(minFpsHidden, Math.floor(targetFps / 3))
+        : targetFps;
+      const budget = Math.max(0, 1000 / Math.max(1, wantFps));
+
+      const hidImg = getHiddenImg();
+      if (!hidImg) {
+        schedule(budget);
+        return;
+      }
+
+      loader.onload = () => {
+        if (!runningRef.current || destroyed) return;
+        hidImg.src = loader.src; // โหลดเสร็จแล้วค่อยอัปเดต src ของ buffer ที่ซ่อน
+        swapBuffers(); // แล้วค่อยสลับโชว์ → ไม่มีเฟรมดำ
+        errCountRef.current = 0;
+        setSnapshotUnstable(false);
+        schedule(budget);
+      };
+
+      loader.onerror = () => {
+        errCountRef.current = Math.min(99, errCountRef.current + 1);
+        if (errCountRef.current >= 3) setSnapshotUnstable(true);
+        schedule(Math.max(300, budget));
+      };
+
+      loader.src = makeUrl();
+    };
+
+    // เริ่มด้วย tick แรก
+    requestAnimationFrame(tick);
+>>>>>>> Stashed changes
 
     // cleanup
     return () => {
+      destroyed = true;
       runningRef.current = false;
+<<<<<<< Updated upstream
       // ยกเลิก timer ที่ยังค้าง
       if (schedule._t) clearTimeout(schedule._t);
       if (tick._t) clearTimeout(tick._t);
       // ตัด handler กันเก็บอ้างอิงไม่จำเป็น
       cur.onload = cur.onerror = null;
       nxt.onload = nxt.onerror = null;
+=======
+      if (timerId) clearTimeout(timerId);
+      loader.onload = loader.onerror = null;
+>>>>>>> Stashed changes
     };
   }, [useSnapshot, baseSnapshotUrl, isPlaying, targetFps, minFpsHidden]);
 
@@ -223,7 +366,6 @@ export default function VideoStream({
               muted
               playsInline
               preload="none"
-              style={{ width: "100%", height: "100%", objectFit }}
             />
           ) : isStreamMJPEG ? (
             <img
@@ -233,9 +375,9 @@ export default function VideoStream({
               decoding="async"
               fetchpriority="high"
               referrerPolicy="no-referrer"
-              style={{ width: "100%", height: "100%", objectFit }}
             />
           ) : (
+<<<<<<< Updated upstream
             <img
               className="video-el"
               alt="Printer camera snapshot"
@@ -246,6 +388,38 @@ export default function VideoStream({
               referrerPolicy="no-referrer"
               style={{ width: "100%", height: "100%", objectFit }}
             />
+=======
+            <>
+              {/* buffer A */}
+              <img
+                ref={imgARef}
+                className="video-el"
+                alt=""
+                decoding="async"
+                fetchpriority="high"
+                referrerPolicy="no-referrer"
+                style={{
+                  opacity: 1, // เริ่มให้ A โชว์ก่อน
+                  transition: "opacity 80ms linear",
+                  objectFit,
+                }}
+              />
+              {/* buffer B */}
+              <img
+                ref={imgBRef}
+                className="video-el"
+                alt="Printer camera snapshot"
+                decoding="async"
+                fetchpriority="high"
+                referrerPolicy="no-referrer"
+                style={{
+                  opacity: 0, // ซ่อน B
+                  transition: "opacity 80ms linear",
+                  objectFit,
+                }}
+              />
+            </>
+>>>>>>> Stashed changes
           )}
 
           <div className="video-controls">
@@ -267,6 +441,7 @@ export default function VideoStream({
             </button>
           </div>
 
+<<<<<<< Updated upstream
           {/* snapshot โชว์ hint เมื่อ error ติดต่อกันเยอะ ๆ */}
           {useSnapshot && errCountRef.current >= 3 && (
             <div className="video-hint">
@@ -275,6 +450,29 @@ export default function VideoStream({
               URL: <code>{baseSnapshotUrl}</code>
               <br />
               (แนะนำลดความละเอียด/เฟรมเรตที่กล้อง หรือใช้โหมด MJPEG ถ้ามี)
+=======
+          {(hint || mixedBlocked || (useSnapshot && snapshotUnstable)) && (
+            <div className="video-hint">
+              {mixedBlocked && (
+                <>
+                  Stream URL is blocked by mixed-content → using snapshot via
+                  proxy.
+                  <br />
+                </>
+              )}
+              {hint && (
+                <>
+                  {hint}
+                  <br />
+                </>
+              )}
+              {useSnapshot && snapshotUnstable && (
+                <>
+                  Snapshot loading is slow/unstable. URL:{" "}
+                  <code>{baseSnapshotUrl}</code>
+                </>
+              )}
+>>>>>>> Stashed changes
             </div>
           )}
         </div>
