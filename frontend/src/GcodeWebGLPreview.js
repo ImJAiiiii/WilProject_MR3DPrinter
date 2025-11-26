@@ -434,11 +434,7 @@ function GcodeWebGLPreviewInner(
 
     // resize
     const onResize = () => {
-<<<<<<< HEAD
       const el = containerEl;
-=======
-      const el = wrapRef.current;
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
       if (!el) return;
       const r = el.getBoundingClientRect();
       const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -449,24 +445,15 @@ function GcodeWebGLPreviewInner(
     };
     onResize();
     const ro = new ResizeObserver(onResize);
-<<<<<<< HEAD
     ro.observe(containerEl);
-=======
-    ro.observe(wrapRef.current);
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
       renderer.dispose();
-<<<<<<< HEAD
       if (containerEl.contains(renderer.domElement)) {
         containerEl.removeChild(renderer.domElement);
-=======
-      if (wrapRef.current?.contains(renderer.domElement)) {
-        wrapRef.current.removeChild(renderer.domElement);
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
       }
       const toRemove = [];
       scene.traverse((o) => {
@@ -564,11 +551,7 @@ function GcodeWebGLPreviewInner(
       setSimplified(Boolean(clipped));
 
       // hide set: auto จาก preset ถ้าไม่ได้ส่ง hide มา
-<<<<<<< HEAD
       // 🔧 preset "clean" ไม่ซ่อน support แล้ว
-=======
-      // 🔧 แก้ให้ preset "clean" ไม่ซ่อน support อีกต่อไป
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
       const hideAuto =
         preset === "clean"
           ? "travel,infill,solid,bridge,gap,skirt,other"
@@ -673,11 +656,7 @@ function GcodeWebGLPreviewInner(
     fitFactor,
     gridPadMM,
     minGridSize,
-<<<<<<< HEAD
   ]); // << ไม่มี token / style ใน deps แล้ว
-=======
-  ]); // << ไม่มี token ใน deps แล้ว
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 
   return (
     <div
@@ -771,8 +750,4 @@ export default React.memo(
     prev.minGridSize === next.minGridSize &&
     prev.height === next.height
   // token / style เปลี่ยนก็ไม่ต้อง re-render preview
-<<<<<<< HEAD
 );
-=======
-);
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2

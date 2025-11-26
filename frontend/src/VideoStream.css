@@ -8,20 +8,6 @@
   margin: 0;         /* ไม่จัดกึ่งกลาง */
 }
 
-<<<<<<< Updated upstream
-.video-wrapper{
-  position: relative;
-  width: 100%;
-}
-
-.video-el{
-  margin-top: 15px;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
-  border-radius: 0;
-  display: block;
-=======
 /* ───────────────── Video Area ───────────────── */
 /* 🔳 กล่องหลักของกล้อง */
 .video-wrapper {
@@ -38,7 +24,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
->>>>>>> Stashed changes
 }
 
 /* ปุ่มควบคุมลอยทับมุมขวาล่างของวิดีโอ */
@@ -48,6 +33,7 @@
   bottom: 12px;
   display: flex;
   gap: 10px;
+  z-index: 2;              /* ทับเหนือภาพ */
 }
 
 .play-pause-button{

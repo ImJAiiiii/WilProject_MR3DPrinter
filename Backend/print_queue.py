@@ -13,10 +13,9 @@ import uuid
 from threading import Lock
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple, Callable, Any
-from urllib.parse import urlencode, quote  # ✅ add quote สำหรับ map object key → URL
+from urllib.parse import urlencode
 
 import httpx
-<<<<<<< HEAD
 from fastapi import (
     APIRouter,
     Depends,
@@ -26,9 +25,6 @@ from fastapi import (
     Query,
     Request,
 )
-=======
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query, Request
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 from sqlalchemy import case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -65,12 +61,8 @@ except Exception:  # pragma: no cover
     async def notify_user(*args, **kwargs):  # type: ignore
         return None
 
-<<<<<<< HEAD
 
 # fire-and-forget helper
-=======
-# ตัวช่วย fire-and-forget
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 def _bgcall(func_or_coro, /, *args, **kwargs):
     try:
         loop = asyncio.get_running_loop()
@@ -254,9 +246,6 @@ def _format_event(
     d = dict(data or {})
     if printer_id and not str(d.get("printer_id") or "").strip():
         d["printer_id"] = printer_id
-<<<<<<< Updated upstream
-    nm = (d.get("job_name") or d.get("name") or d.get("filename") or d.get("file") or "").strip()
-=======
     nm = (
         d.get("name")
         or d.get("job_name")
@@ -264,7 +253,6 @@ def _format_event(
         or d.get("file")
         or ""
     ).strip()
->>>>>>> Stashed changes
     if nm:
         d.setdefault("name", nm)
         d.setdefault("job_name", nm)
@@ -343,10 +331,28 @@ def _emit_event_all_channels(db: Session, employee_id: str, ev: dict):
         _bgcall(_call_notify_user_async, db, employee_id, ev)
     except Exception:
         logger.exception("notify_user spawn failed")
-    try:
-        _bgcall(_call_notify_job_event_async, db, ev)
-    except Exception:
-        logger.exception("notify_job_event spawn failed")
+
+    ev_type = str(ev.get("type") or "").lower().strip()
+    default_dm_types = {
+        "print.started",
+        "print.completed",
+        "print.failed",
+        "print.canceled",
+        "print.paused",
+    }
+    _dm_env = (os.getenv("NOTIFY_DM_TYPES") or "").strip()
+    if _dm_env:
+        dm_types = {t.strip().lower() for t in _dm_env.split(",") if t.strip()}
+    else:
+        dm_types = default_dm_types
+
+    if ev_type in dm_types:
+        try:
+            _bgcall(_call_notify_job_event_async, db, ev)
+        except Exception:
+            logger.exception("notify_job_event spawn failed")
+    else:
+        logger.info("skip DM for event type=%s (policy)", ev_type)
 
 
 # =============================================================================
@@ -375,25 +381,14 @@ AUTO_START_ON_ENQUEUE = _env_bool("AUTO_START_ON_ENQUEUE", False)
 RESUME_DIRECT_PROCESSING = _env_bool("RESUME_DIRECT_PROCESSING", False)
 ALLOW_ADMIN_HEADER = _env_bool("ALLOW_ADMIN_HEADER", True)
 
-<<<<<<< HEAD
 # toggle auto-dispatch to OctoPrint on start-next
 PRINT_AUTOSTART = _env_bool("PRINT_AUTOSTART", True)
 
 REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool(
     "REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True
 )
-=======
-# ✅ ใหม่: toggle สำหรับ auto-dispatch ไป OctoPrint ตอน start-next
-PRINT_AUTOSTART          = _env_bool("PRINT_AUTOSTART", True)
-
-<<<<<<< Updated upstream
-# === Preview / PNG render params =============================================
-=======
-REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 BED_EMPTY_MAX_AGE_SEC = int(os.getenv("BED_EMPTY_MAX_AGE_SEC") or "300")
 
->>>>>>> Stashed changes
 AUTO_PREVIEW_ON_ENQUEUE = _env_bool("AUTO_PREVIEW_ON_ENQUEUE", True)
 PREVIEW_HIDE_TRAVEL = _env_bool("SLICER_PREVIEW_HIDE_TRAVEL", True)
 PREVIEW_DPI = int(os.getenv("SLICER_PREVIEW_DPI") or "500")
@@ -409,7 +404,6 @@ QUEUE_IDEMP_TTL_SEC = float(os.getenv("QUEUE_IDEMP_TTL_SEC") or "12.0")
 _IDEMP_LOCK = Lock()
 _IDEMP_CACHE: Dict[str, Tuple[float, int]] = {}
 
-<<<<<<< HEAD
 # log config
 logger.info(
     "[CFG] BACKEND_INTERNAL_BASE=%s REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT=%s BED_EMPTY_MAX_AGE_SEC=%s",
@@ -424,18 +418,6 @@ logger.info(
 )
 
 
-=======
-# ✅ log ค่า config ตอน start backend
-logger.info(
-    "[CFG] BACKEND_INTERNAL_BASE=%s REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT=%s BED_EMPTY_MAX_AGE_SEC=%s",
-    BACKEND_INTERNAL_BASE, REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT, BED_EMPTY_MAX_AGE_SEC,
-)
-logger.info(
-    "[CFG] AUTO_START_ON_ENQUEUE=%s PRINT_AUTOSTART=%s",
-    AUTO_START_ON_ENQUEUE, PRINT_AUTOSTART,
-)
-
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 def _clean_env(v: Optional[str]) -> str:
     return (v or "").strip().strip('"').strip("'")
 
@@ -453,21 +435,6 @@ try:
 except Exception:
     OCTO_TIMEOUT = 30.0
 
-<<<<<<< Updated upstream
-# ✅ เพิ่มแหล่งที่มาที่ใช้จริง (unity/catalog/user_history)
-ALLOWED_SOURCE = {"upload", "history", "storage", "catalog", "user_history", "unity"}
-
-# ==== Bed-empty gate ====
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name) or default)
-    except Exception:
-        return int(default)
-
-# ✅ ใช้ตัวเดียวให้ชัดเจน (ลบตัวแปรซ้ำก่อนหน้าออก)
-REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT = _env_bool("REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT", True)
-BED_EMPTY_MAX_AGE_SEC = _env_int("BED_EMPTY_MAX_AGE_SEC", 300)
-=======
 _write_timeout_raw = _clean_env(os.getenv("OCTOPRINT_WRITE_TIMEOUT") or "")
 try:
     _wm = (
@@ -483,13 +450,9 @@ if OCTO_WRITE_TIMEOUT <= 0:
 
 ALLOWED_SOURCE = {"upload", "history", "storage", "octoprint"}
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 def _octo_configured() -> bool:
     return bool(OCTO_BASE and OCTO_KEY)
->>>>>>> Stashed changes
 
 
 async def _bed_empty_recent_async(printer_id: str) -> bool:
@@ -622,20 +585,6 @@ def _decorate_employee_name(db: Session, jobs: List[PrintJob]) -> Dict[str, str]
         name_map.setdefault(eid, eid)
     return name_map
 
-<<<<<<< Updated upstream
-# ✅ ช่วย map thumb (object key) → URL ใช้งานได้จริง
-_HTTP_RE = re.compile(r"^https?://", re.I)
-def _thumb_to_url(val: Optional[str]) -> Optional[str]:
-    s = (val or "").strip()
-    if not s:
-        return None
-    if _HTTP_RE.match(s):
-        return s
-    # เดาว่าเป็น object key ใน MinIO → ให้โหลดผ่าน proxy /files/raw
-    return f"/files/raw?object_key={quote(s, safe='')}"
-
-=======
-<<<<<<< HEAD
 
 # --------------------------- naming failsafe ---------------------------------
 def _is_bad_name(name: Optional[str]) -> bool:
@@ -648,18 +597,6 @@ def _fallback_job_name_from_src(src: Optional[str]) -> str:
     """
     ตั้งชื่อจาก basename ของไฟล์: ตัด .gcode/.gco/.gc ออก
     ถ้าไม่มีอะไรให้ใช้ 'Untitled'
-=======
-# --------------------------- naming failsafe (NEW) ---------------------------
-def _is_bad_name(name: Optional[str]) -> bool:
-    """ชื่อที่ถือว่าใช้ไม่ได้ -> ว่าง/ช่องว่าง หรือคำว่า 'storage' (ไม่สนตัวพิมพ์เล็กใหญ่)"""
-    s = (name or "").strip()
-    return (not s) or (s.lower() == "storage")
-
-def _fallback_job_name_from_src(src: Optional[str]) -> str:
-    """
-    ตั้งชื่อจากแหล่งไฟล์: basename โดยตัด .gcode/.gco/.gc ออก
-    ถ้าไม่มีอะไรให้ใช้ -> 'Untitled'
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     """
     try:
         base = os.path.basename((src or "").strip())
@@ -668,7 +605,6 @@ def _fallback_job_name_from_src(src: Optional[str]) -> str:
     except Exception:
         return "Untitled"
 
-<<<<<<< HEAD
 
 def _to_out(
     db: Session,
@@ -676,26 +612,12 @@ def _to_out(
     job: PrintJob,
     name_map: Optional[Dict[str, str]] = None,
 ) -> PrintJobOut:
-=======
->>>>>>> Stashed changes
-def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[Dict[str, str]] = None) -> PrintJobOut:
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     j_source = (getattr(job, "source", None) or "").strip().lower()
     if j_source not in ALLOWED_SOURCE:
         j_source = "storage"
     try:
         o = PrintJobOut.model_validate(job, from_attributes=True)
     except Exception:
-<<<<<<< Updated upstream
-        payload = {k: getattr(job, k, None) for k in [
-            "id","printer_id","employee_id","name","thumb","time_min","status",
-            "uploaded_at","started_at","finished_at","octoprint_job_id"
-        ]}
-        payload["source"] = j_source
-        o = PrintJobOut.model_validate(payload)
-
-    # ✅ ให้ FE ยืนยันยกเลิกได้เฉพาะของตัวเอง/manager
-=======
         payload = {
             k: getattr(job, k, None)
             for k in [
@@ -718,29 +640,16 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
             payload["storage_file_id"] = getattr(job, "storage_file_id", None)
         o = PrintJobOut.model_validate(payload)
 
->>>>>>> Stashed changes
     ok, _ = _can_cancel_with_reason(current_user, job)
     if hasattr(o, "me_can_cancel"):
         o.me_can_cancel = ok
 
-<<<<<<< Updated upstream
-    # ✅ แปลง thumb เป็น URL ทุกครั้ง (งานจาก Unity/Storage จะขึ้นรูปเหมือนเว็บ)
-    try:
-        if hasattr(o, "thumb") and getattr(o, "thumb", None):
-            o.thumb = _thumb_to_url(o.thumb)  # type: ignore[attr-defined]
-    except Exception:
-        pass
-
-    # เติมชื่อพนักงานถ้ามีสคีมา
-=======
     owner_emp = _job_owner_emp(job)
 
->>>>>>> Stashed changes
     if hasattr(o, "employee_name"):
         if name_map is not None:
             o.employee_name = name_map.get(owner_emp, owner_emp)
         else:
-<<<<<<< HEAD
             usr = (
                 db.query(User)
                 .filter(User.employee_id == owner_emp)
@@ -770,11 +679,6 @@ def _to_out(db: Session, current_user: User, job: PrintJob, name_map: Optional[D
                 o.requested_by_name = (usr2.name or rb_emp) if usr2 else rb_emp
 
     # Failsafe: ชื่อว่าง/เป็น 'storage' → สร้างจากไฟล์ต้นทาง
-=======
-            usr = db.query(User).filter(User.employee_id == _emp(job.employee_id)).first()
-            o.employee_name = (usr.name if usr and usr.name else _emp(job.employee_id))
-    # ✅ Failsafe: ถ้าชื่อว่าง/เป็น 'storage' ให้ตั้งจากไฟล์ต้นทางก่อนส่งออกเสมอ
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     if hasattr(o, "name") and _is_bad_name(getattr(o, "name", None)):
         src = getattr(job, "gcode_path", None) or getattr(job, "gcode_key", None)
         o.name = _fallback_job_name_from_src(src)
@@ -799,10 +703,7 @@ def _is_gcode_name(name_or_key: str) -> bool:
 def _is_stl_name(name_or_key: str) -> bool:
     return (name_or_key or "").lower().endswith(".stl")
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 # normalize brand case in path
 def _normalize_brand_case(key: Optional[str]) -> Optional[str]:
     if not key:
@@ -810,7 +711,6 @@ def _normalize_brand_case(key: Optional[str]) -> Optional[str]:
     k = key.lstrip("/")
     # catalog/*
     k = k.replace("catalog/HONTECH/", "catalog/Hontech/")
-<<<<<<< HEAD
     k = k.replace("catalog/DELTA/", "catalog/Delta/")
     k = k.replace("catalog/OTHER/", "catalog/Other/")
     # storage/*
@@ -823,17 +723,6 @@ def _normalize_brand_case(key: Optional[str]) -> Optional[str]:
 def _resolve_owner_by_gkey(
     db: Session, gcode_key_or_path: Optional[str], default_emp: str
 ) -> str:
-=======
-    k = k.replace("catalog/DELTA/",   "catalog/Delta/")
-    k = k.replace("catalog/OTHER/",   "catalog/Other/")
-    # storage/*
-    k = k.replace("storage/HONTECH/", "storage/Hontech/")
-    k = k.replace("storage/DELTA/",   "storage/Delta/")
-    k = k.replace("storage/OTHER/",   "storage/Other/")
-    return k
-
-def _resolve_owner_by_gkey(db: Session, gcode_key_or_path: Optional[str], default_emp: str) -> str:
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     k_raw = (gcode_key_or_path or "").strip()
     k = _normalize_brand_case(k_raw) or k_raw
     if not k or not k.startswith(("storage/", "catalog/")):
@@ -898,15 +787,11 @@ def _ensure_storage_record(
     ct = _guess_ct(base)
     size = None
     try:
-<<<<<<< HEAD
         size = int(
             h.get("ContentLength", 0)
             or h.get("Content-Length", "0")
             or 0
         )
-=======
-        size = int(h.get("ContentLength", 0) or h.get("Content-Length", "0") or 0)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         ct = (h.get("ContentType") or h.get("Content-Type") or ct)
     except Exception:
         pass
@@ -969,12 +854,8 @@ def _derive_model_for_finalize(printer_id: str, payload: Optional[PrintJobCreate
         pass
     return DEFAULT_MODEL
 
-<<<<<<< HEAD
 
 # --- ลบไฟล์เก่าใน staging เพื่อไม่ให้ finalize เข้า catalog โดยไม่ตั้งใจ ---
-=======
-# --- NEW: ลบไฟล์เก่าใน staging เพื่อไม่ให้ finalize เข้า catalog โดยไม่ตั้งใจ ---
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 def _cleanup_staging_artifacts(src_key: str) -> None:
     """ลบไฟล์ staging ตัวหลัก และพยายามลบ .json / .preview.png ที่ชื่อเดียวกัน (ถ้ามี)"""
     try:
@@ -1000,10 +881,7 @@ def _cleanup_staging_artifacts(src_key: str) -> None:
     except Exception:
         logger.exception("cleanup staging failed for %s", src_key)
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 def _finalize_object_if_staging(
     db: Session,
     employee_id: str,
@@ -1028,13 +906,9 @@ def _finalize_object_if_staging(
         if _is_gcode_name(src_base):
             dst_key = _ingest_uploads_to_storage(src_key, src_base)
             if want_record:
-<<<<<<< HEAD
                 _ensure_storage_record(
                     db, employee_id, dst_key, display_name or None
                 )
-=======
-                _ensure_storage_record(db, employee_id, dst_key, display_name or None)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
             return dst_key
         return src_key
 
@@ -1052,13 +926,9 @@ def _finalize_object_if_staging(
             except Exception as e:
                 raise HTTPException(500, f"storage_copy_failed:{src_key}") from e
             if want_record:
-<<<<<<< HEAD
                 _ensure_storage_record(
                     db, employee_id, dst_key, display_name or None
                 )
-=======
-                _ensure_storage_record(db, employee_id, dst_key, display_name or None)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
             try:
                 delete_object(src_key)
             except Exception:
@@ -1079,20 +949,13 @@ def _finalize_object_if_staging(
             raise HTTPException(500, f"finalize_failed:{e}")
         final_key = _normalize_brand_case(out.object_key) or out.object_key
         if want_record:
-<<<<<<< HEAD
             _ensure_storage_record(
                 db, employee_id, final_key, display_name or None
             )
-=======
-            _ensure_storage_record(db, employee_id, final_key, display_name or None)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         return final_key
 
     return src_key
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< HEAD
 
 def _find_storage_file_id(
     db: Session, employee_id: str, gcode_key: Optional[str]
@@ -1101,36 +964,19 @@ def _find_storage_file_id(
         return None
     norm = _normalize_brand_case(gcode_key) or gcode_key
     row = db.query(StorageFile.id).filter(StorageFile.object_key == norm).first()
-=======
-def _find_storage_file_id(db: Session, employee_id: str, gcode_key: Optional[str]) -> Optional[int]:
-    if not gcode_key:
-        return None
-    norm = _normalize_brand_case(gcode_key) or gcode_key
-    row = (
-        db.query(StorageFile.id)
-        .filter(StorageFile.object_key == norm)
-        .first()
-    )
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     if row and row[0]:
         return int(row[0])
     row2 = (
         db.query(StorageFile.id)
-<<<<<<< HEAD
         .filter(
             StorageFile.employee_id == _emp(employee_id),
             StorageFile.object_key == norm,
         )
-=======
-        .filter(StorageFile.employee_id == _emp(employee_id),
-                StorageFile.object_key == norm)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         .first()
     )
     return int(row2[0]) if row2 and row2[0] else None
 
 
->>>>>>> Stashed changes
 # --------------------------- preview helpers ---------------------------------
 def _preview_key_for(gcode_key: Optional[str]) -> Optional[str]:
     if not gcode_key:
@@ -1210,7 +1056,7 @@ def _auto_render_preview(gcode_key: str) -> Optional[str]:
                 return preview_key
     except Exception:
         logger.exception("auto-render preview failed for %s", gcode_key)
-        return None
+    return None
 
 
 def ensure_preview_once(gcode_key: str) -> Optional[str]:
@@ -1385,14 +1231,8 @@ async def _download_bytes(src: str) -> bytes:
 
 
 def _octo_is_ready() -> bool:
-<<<<<<< Updated upstream
-    if not (OCTO_BASE and OCTO_KEY):
-        # ไม่มี config → ถือว่า “พร้อม” เพื่อให้ flow dev ไปต่อได้
-        return True
-=======
     if not _octo_configured():
         return False
->>>>>>> Stashed changes
     url = f"{OCTO_BASE}/api/printer"
     try:
         with httpx.Client(timeout=5.0, follow_redirects=True) as c:
@@ -1409,11 +1249,6 @@ def _octo_is_ready() -> bool:
     except Exception:
         return False
 
-<<<<<<< Updated upstream
-async def _dispatch_to_octoprint(db: Session, job: PrintJob, tasks: Optional[BackgroundTasks] = None) -> None:
-    if not (OCTO_BASE and OCTO_KEY):
-        logger.warning("OctoPrint not configured (base/key missing), skip dispatch")
-=======
 
 def _octo_job_looks_printing() -> bool:
     if not _octo_configured():
@@ -1455,12 +1290,7 @@ async def _dispatch_to_octoprint(
                 "reason": "octoprint_not_configured",
             },
         )
-<<<<<<< HEAD
         _submit_bg(tasks, _emit_event_all_channels, db, target_emp, ev)
-=======
-        _submit_bg(tasks, _emit_event_all_channels, db, job.employee_id, ev)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
->>>>>>> Stashed changes
         return
 
     src = (
@@ -1475,18 +1305,12 @@ async def _dispatch_to_octoprint(
         file_bytes = await _download_bytes(src)
     except Exception:
         logger.exception("Download gcode failed for job %s", job.id)
-<<<<<<< Updated upstream
-        job.status = "failed"
-        job.finished_at = datetime.utcnow()
-        db.add(job); db.commit(); db.refresh(job)
-=======
         job.status = "queued"
         db.add(job)
         db.commit()
         db.refresh(job)
->>>>>>> Stashed changes
         evf = _format_event(
-            type="print.failed",
+            type="print.issue",
             printer_id=job.printer_id,
             data={
                 "name": job.name,
@@ -1586,18 +1410,12 @@ async def _dispatch_to_octoprint(
 
     if last_err:
         logger.error("OctoPrint push failed after retries for job %s", job.id)
-<<<<<<< Updated upstream
-        job.status = "failed"
-        job.finished_at = datetime.utcnow()
-        db.add(job); db.commit(); db.refresh(job)
-=======
         job.status = "queued"
         db.add(job)
         db.commit()
         db.refresh(job)
->>>>>>> Stashed changes
         evf = _format_event(
-            type="print.failed",
+            type="print.issue",
             printer_id=job.printer_id,
             data={
                 "name": job.name,
@@ -1610,14 +1428,10 @@ async def _dispatch_to_octoprint(
 
 
 # -------------------------- RUNMAP binder ------------------------------------
-<<<<<<< HEAD
 def _bind_runmap_remote(
     printer_id: str, job: PrintJob, *, octo_user: Optional[str] = None
 ) -> None:
     owner_emp = _job_owner_emp(job)
-=======
-def _bind_runmap_remote(printer_id: str, job: PrintJob, *, octo_user: Optional[str] = None) -> None:
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     try:
         try:
             from printer_status import _bind_runmap as _bind_runmap_core  # type: ignore
@@ -1657,13 +1471,9 @@ def _bind_runmap_remote(printer_id: str, job: PrintJob, *, octo_user: Optional[s
 
 
 # -------------------------- notifier (async-first) ---------------------------
-<<<<<<< HEAD
 def _notify_job_event_async(
     job_id: int, status_out: str, printer_id: str, name: Optional[str]
 ):
-=======
-def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name: Optional[str]):
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     async def _run():
         try:
             try:
@@ -1718,17 +1528,7 @@ def _notify_job_event_async(job_id: int, status_out: str, printer_id: str, name:
 
 # -------------------------- bed-empty status (sync) --------------------------
 def _bed_empty_recent_sync(printer_id: str) -> bool:
-<<<<<<< Updated upstream
-    """
-    ดึงสถานะเตียงล่าสุดจาก notifications service
-    ยอมให้ผ่านเมื่อ:
-      - ปิด REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT หรือ
-      - age_sec <= BED_EMPTY_MAX_AGE_SEC
-    """
-    if not REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:  # ✅ ใช้ชื่อตัวแปรเดียว
-=======
     if not REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
->>>>>>> Stashed changes
         return True
     if not ADMIN_TOKEN:
         logger.warning("[QUEUE] bed-gate: ADMIN_TOKEN missing -> block")
@@ -1768,7 +1568,6 @@ def _start_next_job_if_idle(
 ) -> Optional[PrintJob]:
     printer_id = _norm_printer_id(printer_id)
 
-<<<<<<< HEAD
     has_processing = (
         db.query(PrintJob)
         .filter(
@@ -1794,59 +1593,27 @@ def _start_next_job_if_idle(
         .order_by(PrintJob.uploaded_at.asc(), PrintJob.id.asc())
         .first()
     )
-=======
-    has_processing = db.query(PrintJob).filter(
-        PrintJob.printer_id == printer_id,
-        PrintJob.status == "processing"
-    ).first()
-    if has_processing:
-        logger.info(
-            "[QUEUE] start-next: already has processing job (printer=%s, job#%s)",
-            printer_id, has_processing.id,
-        )
-        return None
-
-    next_job = db.query(PrintJob).filter(
-        PrintJob.printer_id == printer_id,
-        PrintJob.status == "queued"
-    ).order_by(PrintJob.uploaded_at.asc(), PrintJob.id.asc()).first()
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     if not next_job:
         logger.info("[QUEUE] start-next: no queued job for printer=%s", printer_id)
         return None
 
-<<<<<<< Updated upstream
-    # === NEW: bed-empty gate ===
-=======
     logger.info(
         "[QUEUE] start-next: candidate job#%s (printer=%s, name=%s)",
-<<<<<<< HEAD
         next_job.id,
         printer_id,
         next_job.name,
-=======
-        next_job.id, printer_id, next_job.name,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     )
 
->>>>>>> Stashed changes
     if REQUIRE_BED_EMPTY_FOR_PROCESS_NEXT:
         ok = _bed_empty_recent_sync(printer_id)
         if not ok:
             logger.info(
                 "[QUEUE] block start: bed not confirmed empty (printer=%s, job#%s)",
-<<<<<<< HEAD
                 printer_id,
                 next_job.id,
-=======
-                printer_id, next_job.id,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
             )
             return None
 
-<<<<<<< Updated upstream
-    # ผ่าน gate → เริ่มงาน
-=======
     if not _octo_configured():
         logger.info(
             "[QUEUE] skip start: OctoPrint not configured (printer=%s, job#%s)",
@@ -1855,7 +1622,6 @@ def _start_next_job_if_idle(
         )
         return None
 
->>>>>>> Stashed changes
     now = datetime.utcnow()
     next_job.status = "processing"
     if not next_job.started_at:
@@ -1871,34 +1637,16 @@ def _start_next_job_if_idle(
         PRINT_AUTOSTART,
     )
 
-    logger.info(
-        "[QUEUE] start-next: marked job#%s as processing (printer=%s, auto_start=%s)",
-        next_job.id, printer_id, PRINT_AUTOSTART,
-    )
-
     _bind_runmap_remote(printer_id, next_job)
 
-<<<<<<< HEAD
     # ใช้ PRINT_AUTOSTART คุมว่าจะ push เข้า OctoPrint เลยไหม
     if PRINT_AUTOSTART:
-=======
-    # ✅ ใช้ PRINT_AUTOSTART คุมว่าจะ push เข้า OctoPrint เลยไหม
-    if PRINT_AUTOSTART:
-        logger.info(
-            "[QUEUE] start-next: dispatch to OctoPrint for job#%s (printer=%s)",
-            next_job.id, printer_id,
-        )
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         _submit_bg(tasks, _dispatch_to_octoprint, db, next_job, tasks)
     else:
         logger.info(
             "[QUEUE] start-next: NOT auto-dispatch to OctoPrint (PRINT_AUTOSTART=0) for job#%s (printer=%s)",
-<<<<<<< HEAD
             next_job.id,
             printer_id,
-=======
-            next_job.id, printer_id,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         )
 
     return next_job
@@ -1953,28 +1701,11 @@ def _enqueue_job(
         original_key_in and gcode_src_in and original_key_in == gcode_src_in
     )
 
-<<<<<<< Updated upstream
-    if original_key_in and not same_key:
-        _ = _finalize_object_if_staging(
-            db, _emp(current.employee_id),
-            original_key_in,
-            display_name=name or original_key_in,
-            want_record=False,
-            model_for_catalog=model_for_catalog,
-            user=current,
-        )
-=======
-<<<<<<< HEAD
     # ถ้า original != gcode_src และ original อยู่ staging ให้ลบทิ้ง
     if original_key_in and not same_key and str(original_key_in).startswith(
         "staging/"
     ):
-=======
-    # ✅ ถ้า original != gcode_src และ original อยู่ staging ให้ "ลบทิ้ง"
-    if original_key_in and not same_key and str(original_key_in).startswith("staging/"):
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         _cleanup_staging_artifacts(original_key_in)
->>>>>>> Stashed changes
 
     gcode_final = None
     if gcode_src_in:
@@ -1990,22 +1721,11 @@ def _enqueue_job(
 
     db.commit()
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< HEAD
     gk = gcode_final or gcode_path_in or gcode_key_in
     pkey = _preview_key_for(gk) if gk else None
     job_thumb = payload.thumb or pkey
 
     # ตั้งชื่อ fallback จากไฟล์ถ้าชื่อไม่เหมาะสม
-=======
->>>>>>> Stashed changes
-    gk = (gcode_final or gcode_path_in or gcode_key_in)
-    pkey = _preview_key_for(gk) if gk else None
-    job_thumb = payload.thumb or pkey  # ✅ เซ็ตเป็น object key ไปก่อน เดี๋ยวตอนส่งออก map เป็น URL ให้
-
-    # ✅ ตั้งชื่อ fallback จากไฟล์ถ้าชื่อไม่เหมาะสม
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     if _is_bad_name(name):
         name = _fallback_job_name_from_src(gk or original_key_in or gcode_src_in)
 
@@ -2047,13 +1767,10 @@ def _enqueue_job(
         )
         return _to_out(db, current, dup)
 
-<<<<<<< Updated upstream
-=======
     storage_file_id: Optional[int] = None
     if hasattr(PrintJob, "storage_file_id"):
         storage_file_id = _find_storage_file_id(db, owner_emp, gk)
 
->>>>>>> Stashed changes
     job_kwargs = dict(
         printer_id=printer_id,
         employee_id=owner_emp,
@@ -2067,6 +1784,8 @@ def _enqueue_job(
     )
     if hasattr(PrintJob, "requested_by_employee_id"):
         job_kwargs["requested_by_employee_id"] = requester_emp
+    if hasattr(PrintJob, "storage_file_id"):
+        job_kwargs["storage_file_id"] = storage_file_id
 
     job = PrintJob(**job_kwargs)
 
@@ -2107,12 +1826,8 @@ def _enqueue_job(
     if AUTO_START_ON_ENQUEUE:
         logger.info(
             "[QUEUE] enqueue: AUTO_START_ON_ENQUEUE=1 → try start-next (printer=%s, job#%s)",
-<<<<<<< HEAD
             printer_id,
             job.id,
-=======
-            printer_id, job.id,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         )
         _start_next_job_if_idle(db, printer_id, tasks)
 
@@ -2216,11 +1931,7 @@ def list_queue(
 
 
 # -----------------------------------------------------------------------------#
-<<<<<<< HEAD
 # current job  (ใช้หัวคิว: processing ก่อน ถ้าไม่มีใช้ queued ตัวแรก)
-=======
-# current job
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 # -----------------------------------------------------------------------------#
 @router.get("/printers/{printer_id}/current-job", response_model=CurrentJobOut)
 def current_job_for_printer(
@@ -2273,11 +1984,7 @@ def current_job_for_printer(
             return CurrentJobOut(
                 queue_number=qnum,
                 file_name=cur.name or "(Unknown)",
-<<<<<<< Updated upstream
-                thumbnail_url=_thumb_to_url(cur.thumb) or "/images/placeholder-model.png",  # ✅ map เป็น URL เสมอ
-=======
                 thumbnail_url=thumb_url,
->>>>>>> Stashed changes
                 job_id=cur.id,
                 status=("processing" if cur.status == "processing" else cur.status),
                 started_at=cur.started_at,
@@ -2598,31 +2305,18 @@ def _check_admin_token(token: str):
 @router.post("/internal/printers/{printer_id}/queue/process-next")
 def internal_process_next(
     printer_id: str,
-<<<<<<< HEAD
     request: Request,
-=======
-    request: Request,                         # ✅ ต้องมาก่อน parameter ที่มี default
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
     x_admin_token: str = Header(default=""),
     x_reason: str = Header(default=""),
-<<<<<<< Updated upstream
-    request: Request = None,  # ✅ รับ request จริงเพื่ออ่าน header
-=======
->>>>>>> Stashed changes
 ):
     _check_admin_token(x_admin_token)
     pid = _norm_printer_id(printer_id)
 
-<<<<<<< HEAD
     reason = (x_reason or request.headers.get("X-Reason", "-") or "-").strip()
     reason_lc = reason.lower()
-=======
-    reason = x_reason or request.headers.get("X-Reason", "-")
-    logger.info("[QUEUE] process-next requested (printer=%s) reason=%s force=%s", pid, reason, bool(force))
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 
     # bed_empty ห้ามใช้ force ไม่ว่าข้างนอกจะส่งอะไรมาก็ตาม
     if reason_lc in {"bed_empty", "bed-empty", "bedempty"}:

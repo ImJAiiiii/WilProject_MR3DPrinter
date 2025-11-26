@@ -90,7 +90,6 @@ export default function ModalUpload({
   onUploaded,
   onQueue,
 }) {
-  if (!isOpen) return null;
 
   const api = useApi();
   const { token } = useAuth();
@@ -699,6 +698,8 @@ export default function ModalUpload({
     return invalidByRegex ? 'Name must be like ModelName_V1' : '';
   })();
 
+  if (!isOpen) return null;
+  
   return (
     <>
       {/* ซ่อนกล่องอัปโหลดเมื่อพรีวิวเปิด */}

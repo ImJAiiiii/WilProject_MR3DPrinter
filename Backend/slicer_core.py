@@ -380,7 +380,6 @@ def slice_stl_to_gcode(
 
     # 3) ตรวจผล / map ข้อผิดพลาดให้เข้าใจง่าย
     log_l = (logtxt or "").lower()
-<<<<<<< HEAD
 
     # เคสชิ้นงานอยู่นอก volume → ถือว่าผิดแน่นอน
     if "outside of the print volume" in log_l or "no outline can be derived" in log_l:
@@ -413,17 +412,6 @@ def slice_stl_to_gcode(
             # ไม่มีไฟล์/ไฟล์เล็กผิดปกติ → ถือว่า fail จริง
             raise RuntimeError("slicing_failed:preset_not_found\n" + (logtxt or ""))
 
-=======
-    if "outside of the print volume" in log_l or "no outline can be derived" in log_l:
-        raise RuntimeError("slicing_failed:outside_build_volume\n" + (logtxt or ""))
-    if "unknown preset" in log_l or ("can't find" in log_l and "profile" in log_l):
-        raise RuntimeError("slicing_failed:preset_not_found\n" + (logtxt or ""))
-    if rc == 127:
-        raise RuntimeError("slicing_failed:slicer_not_found")
-    if rc != 0:
-        raise RuntimeError(f"slicing_failed:cli_exit_{rc}\n" + (logtxt or ""))
-
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     if not out_gcode.exists() or out_gcode.stat().st_size < 50:
         raise RuntimeError("slicing_failed:empty_gcode")
 
@@ -433,4 +421,4 @@ def slice_stl_to_gcode(
         "log": logtxt,
         "prep": prep,  # unit_scale / fit_scale / final_size_xyz / bed_xyz
         **meta,
-    }  
+    }

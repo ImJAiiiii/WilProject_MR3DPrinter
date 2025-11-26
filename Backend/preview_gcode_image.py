@@ -6,12 +6,8 @@ G-code → Isometric PNG preview (true scale, clean polylines)
 - อ่าน G-code แล้วรวม segment extrusion ต่อเนื่องเป็น polyline 3D
 - แยกสีตาม TYPE ของ PrusaSlicer/Cura (perimeter, infill, support ฯลฯ)
 - วาดแบบ orthographic isometric + floor grid + bed outline
-<<<<<<< HEAD
 - รองรับ depth-fade ตามเลเยอร์ (แต่ค่า default ปัจจุบันจะวาดสีทึบเท่ากันทุกเลเยอร์)
 - มีการ subsample segment อัตโนมัติถ้าเส้นเยอะมาก เพื่อลดโอกาส MemoryError
-=======
-- ใช้ depth-fade ให้เลเยอร์บนจางลงเล็กน้อยเพื่อมิติที่ดีขึ้น
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 """
 
 from __future__ import annotations
@@ -40,12 +36,9 @@ E_MIN_ABS     = 1e-4      # ΔE ขั้นต่ำที่ถือว่า
 E_PER_MM_MIN  = 2e-4      # ΔE ต่อระยะ XY ขั้นต่ำ
 RETRACT_TOL   = -1e-9     # ถ้า ΔE < RETRACT_TOL ถือว่า retract
 
-<<<<<<< HEAD
 # limit จำนวน segment สูงสุดตอน render ป้องกันกินเมมเยอะเกิน
 MAX_SEGMENTS_RENDER = 300_000
 
-=======
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 # สีตาม TYPE (ปรับโทนให้อิ่มและ contrast ดีขึ้น)
 # NOTE: เพิ่ม key "Support material interface" ให้ตรงกับ G-code ของ PrusaSlicer
 TYPE_COLORS = {
@@ -349,13 +342,8 @@ def render(
     cols: List[str],
     outpath: Path | str,
     *,
-<<<<<<< HEAD
     fade: float = 1.0,            # 1.0 = ไม่มี depth-fade
     lw: float = 0.9,
-=======
-    fade: float = 0.8,
-    lw: float = 0.7,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     zscale: float = 1.0,
     pad_factor: float = 0.40,
     grid_step: float = 10.0,
@@ -363,7 +351,6 @@ def render(
     figsize: Tuple[float, float] = (8.0, 6.0),   # 4:3
     antialias: bool = True,
     bed: Tuple[float, float] | None = None,
-<<<<<<< HEAD
     alpha_floor: float = 1.0,     # 1.0 = ทุกเส้นทึบ 100%
     darken: float = 1.0,          # 1.0 = ไม่ทำสีดรอปลง
     azim_deg: float = -135.0,     # หันเตียงแบบเดียวกับใน Prusa (มองจากมุมหน้า-ขวา)
@@ -388,16 +375,6 @@ def render(
     fig = plt.figure(figsize=figsize, dpi=dpi_eff)
     ax = fig.add_subplot(111, projection="3d")
 
-=======
-    alpha_floor: float = 0.55,
-    darken: float = 0.92,
-    azim_deg: float = -135.0,                    # หันเตียงแบบเดียวกับใน Prusa (มองจากมุมหน้า-ขวา)
-    elev_deg: float = 35.2643897,
-) -> None:
-    fig = plt.figure(figsize=figsize, dpi=dpi)
-    ax = fig.add_subplot(111, projection="3d")
-
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     # theme
     ax.set_facecolor("#141414")
     fig.patch.set_facecolor("#141414")
@@ -436,11 +413,7 @@ def render(
         if bed:
             add_bed_outline(ax, bed_w=bed[0], bed_d=bed[1], z0=grid_z)
 
-<<<<<<< HEAD
         # depth-fade (optional – ด้วยค่า default จะได้ alpha=1 เสมอ)
-=======
-        # depth-fade
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         z_min, z_max = Z.min(), Z.max()
         z_range = max(z_max - z_min, 1e-6)
         mean_z = [np.mean(pl[:, 2]) for pl in polylines]
@@ -448,7 +421,6 @@ def render(
         polylines = [polylines[i] for i in order]
         cols = [cols[i] for i in order]
 
-<<<<<<< HEAD
         alphas: List[float] = []
         for mz in mean_z:
             if fade is None or fade <= 0 or abs(fade - 1.0) < 1e-3:
@@ -457,22 +429,12 @@ def render(
             else:
                 norm = (mz - z_min) / z_range
                 a = fade ** (1.0 - norm)
-=======
-        alphas = []
-        for mz in mean_z:
-            norm = (mz - z_min) / z_range
-            a = fade ** (1.0 - norm)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
             a = max(alpha_floor, min(1.0, a))
             alphas.append(a)
         alphas = [alphas[i] for i in order]
         rgba_cols = [to_rgba(c, a) for c, a in zip(cols, alphas)]
 
-<<<<<<< HEAD
         # ทำสีให้ดาร์กลงเล็กน้อยกันแสบตา (ถ้า darken < 1)
-=======
-        # ทำสีให้ดาร์กลงเล็กน้อยกันแสบตา
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
         if darken is not None and 0.0 < darken < 1.0:
             tmp = []
             for r, g, b, a in rgba_cols:
@@ -483,7 +445,6 @@ def render(
         dpi_scale = fig.dpi / 110.0
         adj_lw = max(0.35, lw / dpi_scale)
 
-<<<<<<< HEAD
         # แปลง polylines → segment 2 จุด (มี subsample ด้วย stride)
         segments: List[np.ndarray] = []
         seg_colors: List[Tuple[float, float, float, float]] = []
@@ -495,16 +456,6 @@ def render(
             for i in range(0, n - 1, step):
                 segments.append(np.vstack((pl[i], pl[i + 1])))
                 seg_colors.append(c)
-=======
-        # แปลง polylines → segment 2 จุด
-        segments: List[np.ndarray] = []
-        seg_colors: List[Tuple[float, float, float, float]] = []
-        for pl, c in zip(polylines, rgba_cols):
-            if pl.shape[0] < 2:
-                continue
-            segments.extend([[pl[i], pl[i + 1]] for i in range(pl.shape[0] - 1)])
-            seg_colors.extend([c] * (pl.shape[0] - 1))
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
 
         if segments:
             lc = Line3DCollection(
@@ -554,13 +505,8 @@ def gcode_to_preview_png(
     out_path: str | Path,
     *,
     include_travel: bool = False,
-<<<<<<< HEAD
     lw: float = 0.9,
     fade: float = 1.0,
-=======
-    lw: float = 0.7,
-    fade: float = 0.8,
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     zscale: float = 1.0,
     pad: float = 0.40,
     grid: float = 10.0,
@@ -634,13 +580,8 @@ if __name__ == "__main__":
     ap.add_argument("gcode", help="path to .gcode")
     ap.add_argument("--out", default=None, help="output PNG path (default: <name>_preview.png)")
     ap.add_argument("--include-travel", action="store_true", help="draw travel moves")
-<<<<<<< HEAD
     ap.add_argument("--lw", type=float, default=0.9)
     ap.add_argument("--fade", type=float, default=1.0)
-=======
-    ap.add_argument("--lw", type=float, default=0.7)
-    ap.add_argument("--fade", type=float, default=0.8)
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     ap.add_argument("--zscale", type=float, default=1.0)
     ap.add_argument("--pad", type=float, default=0.40)
     ap.add_argument("--grid", type=float, default=10.0)

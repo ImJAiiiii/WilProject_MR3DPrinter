@@ -21,11 +21,7 @@ const RE = {
   layerMark: /^;\s*LAYER:\s*(-?\d+)/i,
   layerChange: /^;\s*LAYER_CHANGE\b/i,
   elapsed: /^;\s*TIME_ELAPSED:([0-9.]+)/i,
-<<<<<<< HEAD
   // 👇 อ่าน support mode จาก header ของ PrusaSlicer
-=======
-  // 👇 ใหม่: อ่าน support mode จาก header ของ PrusaSlicer
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
   supportMaterial: /;\s*support_material\s*=\s*([01])/i,
   supportBuildPlate: /;\s*support_material_buildplate_only\s*=\s*([01])/i,
 };
@@ -157,11 +153,7 @@ function parseInfoFromGcode(txt) {
   const fl = parseFirstLayerTime(txt);
   if (fl) info.first_layer = fl;
 
-<<<<<<< HEAD
   // 👇 support mode จาก header ของ PrusaSlicer
-=======
-  // 👇 ใหม่: support mode จาก header ของ PrusaSlicer
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
   const sm = RE.supportMaterial.exec(txt);
   if (sm) {
     const on = sm[1].trim() === "1";
@@ -197,12 +189,6 @@ export default function PreviewPrintModal({
   onConfirm,
   confirming = false
 }) {
-<<<<<<< HEAD
-=======
-  // ❌ เดิม: if (!open || !data) return null;  (ทำให้ hooks ถูกเรียก "หลัง early return")
-  // ✅ แก้เป็น: เรียก hooks ให้ครบก่อน แล้วค่อยเช็ค open/data ด้านล่าง
-
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
   const api = useApi();
   const { token } = useAuth();
 
@@ -361,17 +347,10 @@ export default function PreviewPrintModal({
     );
   const materialDisplay = materialKey ? (MATERIAL_LABEL[materialKey] || materialKey) : "-";
 
-<<<<<<< HEAD
   // 👇 ใช้ค่าจาก G-code เป็นหลัก ถ้าไม่มีค่อย fallback ไป settings
   const supportModeForDisplay =
     gcodeInfo?.support ||
     data?.settings?.support ||
-=======
-  // 👇 ใหม่: เลือก support จาก settings ถ้ามี, ถ้าไม่มีค่อย fallback ไป gcodeInfo.support
-  const supportModeForDisplay =
-    data?.settings?.support ||
-    gcodeInfo?.support ||
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
     null;
 
   const supportDisplay =
@@ -546,10 +525,6 @@ export default function PreviewPrintModal({
 
   const onScrimClick = () => { if (!confirming) onClose?.(); };
 
-<<<<<<< HEAD
-=======
-  // 🔧 ย้าย guard มาไว้หลัง hooks ทั้งหมด
->>>>>>> 9ecec3e6ea86781b1d3b2ab5a829b9bc50a566c2
   if (!open || !data) {
     return null;
   }

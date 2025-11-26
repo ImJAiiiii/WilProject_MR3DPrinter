@@ -245,20 +245,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       const isGcode = isGcodeExt(ext);
       const ts = parseTs(raw?.uploaded_at);
 
-<<<<<<< Updated upstream
-    // preview url
-    let thumbUrl = null, thumbAlt = "";
-    if (typeof raw?.preview_url === "string" && /^https?:\/\//i.test(raw.preview_url)) {
-      thumbUrl = raw.preview_url;
-    } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
-      thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, token);
-    }
-
-    if (!thumbUrl) {
-      if (raw?.thumb) {
-        if (raw.thumb.startsWith("/images/")) {
-          thumbUrl = raw.thumb;
-=======
       // preview url
       let thumbUrl = null,
         thumbAlt = "";
@@ -271,21 +257,11 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
       } else if (typeof raw?.preview_url === "string" && raw.preview_url) {
         if (raw.preview_url.startsWith("/images/")) {
           thumbUrl = raw.preview_url;
->>>>>>> Stashed changes
         } else {
           thumbUrl = toRawUrl(api.API_BASE, raw.preview_url, thumbToken);
         }
       }
 
-<<<<<<< Updated upstream
-
-    const up = raw?.uploader || null;
-    let uploaderName = (up?.name || up?.employee_id || "") || null;
-    if (uploaderName && (uploaderName.toLowerCase() === (name || "").toLowerCase() || looksLikeFilename(uploaderName))) {
-      uploaderName = null;
-    }
-    const uploaderEmp = up?.employee_id || null;
-=======
       if (!thumbUrl) {
         if (raw?.thumb) {
           if (raw.thumb.startsWith("/images/")) {
@@ -305,7 +281,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
           thumbAlt = alt || "";
         }
       }
->>>>>>> Stashed changes
 
       const up = raw?.uploader || null;
       let uploaderName = (up?.name || up?.employee_id || "") || null;
@@ -369,8 +344,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     );
   }, [q, dq, merged]);
 
-<<<<<<< Updated upstream
-=======
   /* ---------- show only G-code (and only catalog/*) ---------- */
   const gcodeFiles = useMemo(() => {
     const isCtGcode = (ct = "") =>
@@ -384,7 +357,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
     });
   }, [files]);
 
->>>>>>> Stashed changes
   /* ---------- permissions ---------- */
   const isManager = !!(
     user?.is_manager ||
@@ -565,10 +537,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
           </div>
         </div>
 
-<<<<<<< Updated upstream
-        <div className="file-count" aria-live="polite" style={{ paddingTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-          {loading ? "…" : `${files.length} item${files.length === 1 ? "" : "s"}`}
-=======
         <div
           className="file-count"
           aria-live="polite"
@@ -584,7 +552,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
             : `${gcodeFiles.length} item${
                 gcodeFiles.length === 1 ? "" : "s"
               }`}
->>>>>>> Stashed changes
           <button
             type="button"
             className="btn-refresh"
@@ -604,10 +571,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
       )}
 
-<<<<<<< Updated upstream
-      {(!loading && files.length === 0) ? (
-        <div style={{ textAlign: "center", color: "#667", padding: "48px 12px" }}>
-=======
       {isInitialLoading ? (
         <div
           style={{
@@ -628,7 +591,6 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
             padding: "48px 12px",
           }}
         >
->>>>>>> Stashed changes
           <img
             src={process.env.PUBLIC_URL + "/icon/file.png"}
             alt=""
@@ -646,15 +608,10 @@ export default function StoragePage({ items = [], onQueue, onDeleteItem }) {
         </div>
       ) : (
         <div className="file-grid" aria-busy={loading ? "true" : "false"}>
-<<<<<<< Updated upstream
-          {files.map((f) => {
-            const delDisabled = deletingKey && (deletingKey === (f.object_key || f.id || f.name));
-=======
           {gcodeFiles.map((f) => {
             const delDisabled =
               deletingKey &&
               deletingKey === (f.object_key || f.id || f.name);
->>>>>>> Stashed changes
             return (
               <div
                 key={`${f.object_key || f.id || f.name}`}
