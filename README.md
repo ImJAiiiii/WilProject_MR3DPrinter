@@ -817,3 +817,451 @@ S3_SECURE=false
 - เปิด dev tools (F12) → tab Network → ดู request รูปว่าขึ้น 404/403 หรือไม่
 
 - ถ้า 403 CORS ให้ตั้ง CORS ของ MinIO ให้ allow จาก origin ของ frontend
+
+# Raspberry Pi Setup (Detection System)
+If you reused the same Raspberry Pi board, most setup steps are already completed.
+
+The Raspberry Pi performs:
+- Camera capture
+- YOLO ONNX detection
+- Bed empty classification
+- Sending alerts to the backend
+
+## 1. Update IP inside detect-stream.service
+Some deployments include IPs hardcoded inside the service (SELF_BASE or BACKEND_URL fallback).
+
+Check the service file:
+```bash
+sudo nano /etc/systemd/system/detect-stream.service
+```
+Look for lines like:
+```ini
+Environment=BACKEND_URL=http://10.228.0.118:8000/notifications/alerts
+Environment=SNAPSHOT_URL=http://10.228.0.239:8080/?action=snapshot
+Environment=SELF_BASE=http://10.228.0.239:8000
+```
+If they exist → update all to new IPs.
+Example (after update):
+```ini
+Environment=BACKEND_URL=http://<NEW_BACKEND_IP>:8000/notifications/alerts
+Environment=SNAPSHOT_URL=http://<PI_IP>:8080/?action=snapshot
+Environment=SELF_BASE=http://<PI_IP>:8000
+```
+Then reload service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart detect-stream
+```
+## 2. Troubleshooting – Raspberry Pi (Detection + Camera + OctoPrint)
+### 2.1 Detection Service Not Running
+**Symptoms:** No alerts sent to backend, no logs, service stops  
+**Fix:**
+- Restart the service:
+  ```bash
+  sudo systemctl restart detect-stream
+  ```
+- View logs:
+  ```bash
+  journalctl -u detect-stream -f
+  ```
+- Check for missing model paths or wrong IP inside:
+
+    `/home/adi/detect_stream.env`
+
+    `/etc/systemd/system/detect-stream.service`
+
+### 2.2 Wrong IP After Changing Network
+**Symptoms:** No alerts, backend gets nothing, camera not loading
+**Fix:**
+
+- Update Pi IP in:
+
+    - SNAPSHOT_URL (inside detect_stream.env)
+
+    - Any hardcoded IP inside detect-stream.service
+
+- Reload service:
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl restart detect-stream
+  ```
+### 2.3 Camera Feed Not Working
+**Symptoms:** Black image, snapshot not updating
+**Fix:**
+- Test snapshot URL:
+  ```cpp
+  http://<PI_IP>:8080/?action=snapshot
+  ```
+- Check camera device:
+  ```bash
+  ls /dev/video*
+  ```
+Device may switch `/dev/video0 → /dev/video1`
+
+- Restart or replug USB camera if needed
+
+### 2.4 Cannot Reach Backend
+**Symptoms:** “Failed to send alert” in logs
+**Fix:**
+- Test connectivity:
+  ```bash
+  ping <BACKEND_IP>
+  curl http://<BACKEND_IP>:8000/healthz/live
+  ```
+- Ensure Pi and backend are on the same network
+- Check firewall or Wi-Fi isolation settings
+
+### 2.5 Detection Not Triggering
+**Symptoms:** No spaghetti/layer-shift detection
+**Fix:**
+- Confirm ONNX models exist in:
+
+    `/home/adi/models/print_issue/`
+
+    `/home/adi/models/bed_empty/`
+
+- Lower confidence temporarily:
+  ```ini
+  CONF_THRESHOLD=0.5
+  ```
+- Ensure camera provides clear, bright images
+
+### 2.6 OctoPrint Not Responding
+**Symptoms:** Backend queue stuck, printer not starting
+**Fix:**
+- Restart OctoPrint:
+  ```bash
+  sudo systemctl restart octoprint
+  ```
+- Verify printer USB cable
+
+- Check API key and active connection from OctoPrint UI
+
+### 2.6 OctoPrint Not Responding
+**Symptoms:** Delay in detection, frame drops
+**Fix:**
+- Ensure proper cooling/ventilation
+
+- Reduce camera resolution (e.g., 1280×720 → 640×480)
+
+- Close unused processes
+
+- Use a stable 5V 3A power supply
+
+# Unity + HoloLens Setup
+The MR interface provides:
+- Queue management
+- Real-time printer status
+- Model previews
+
+## 1. Installing Tools for MRTK Development
+### 1.1 Operating System Requirements
+MRTK is supported **only on Windows**.
+Install one of the following:
+
+- **Windows 10**
+
+- **Windows 11** (recommended)
+
+### 1.2 Installing Visual Studio 2022
+Visual Studio 2022 is required for:
+
+- Building and deploying **UWP (Universal Windows Platform)** applications
+- Compiling Unity projects for HoloLens 2
+
+During installation, you must enable the following Workloads:
+
+#### **Required Workloads**
+
+- .NET Desktop Development
+
+- Desktop Development with C++
+
+- Universal Windows Platform (UWP) Development
+
+- Game Development with Unity (recommended if using Unity)
+
+#### **Required Components inside UWP Workload**
+
+- **Windows 10 SDK** (version 10.0.19041.0 or 10.0.18362.0)
+or Windows 11 SDK
+
+- **USB Device Connectivity**
+(Required for deploying and debugging apps on HoloLens via USB)
+
+- **C++ (v142) Universal Windows Platform Tools**
+(Required when building Unity projects for UWP/HoloLens)
+
+Ensure all these components are installed before building a HoloLens application from Unity.
+
+### 1.3 Installing the Mixed Reality Toolkit (MRTK)
+MRTK provides essential UI, input, and interaction components for HoloLens development.
+
+Follow these steps:
+
+1. Install the Mixed Reality Feature Tool for Unity (latest version).
+
+2. Open the tool and select your Unity project.
+
+3. Under Features, select:
+
+    **Required MRTK Components**
+
+- MRTK3 – Select All packages
+
+- Platform Support → Mixed Reality OpenXR Plugin
+
+4. Import all selected features into the Unity project.
+
+Once imported, MRTK3 components will appear under the Unity Packages folder and the MRTK configuration profiles will be available for scene setup.
+
+## 2. HoloLens 2 Configuration in Unity
+### 2.1 Install a Supported Unity Version
+Use a Unity version that supports MRTK3 and HoloLens 2:
+
+- **Unity 2022.3 LTS** (recommended)
+
+- Unity 2021.3 LTS (legacy compatibility)
+
+### 2.2 Install Required Unity Modules
+During Unity installation (or later via Unity Hub), enable:
+
+- **Universal Windows Platform Build Support**
+
+- **Windows Build Support (IL2CPP)**
+
+These modules are required for building UWP apps and deploying to HoloLens 2.
+
+## 2.3 Configure OpenXR
+
+OpenXR must be enabled as the primary XR backend.
+
+**Enable XR Plugin Management**
+
+1. Navigate to
+
+    **Edit → Project Settings → XR Plugin Management**
+
+2. Install and enable **XR Plugin Management**
+
+3. Under the **UWP** tab, select **OpenXR** as the active XR provider
+
+## 2.4 Configure OpenXR Features
+After selecting OpenXR:
+
+1. Navigate to
+
+    **Project Settings → XR Plug-in Management → OpenXR**
+
+2. Under **Features**, enable the following:
+
+**Required OpenXR Features**
+
+- **Microsoft Hand Interaction Profile**
+*(Required for hand tracking, gestures, MRTK3 interaction)*
+
+- **Eye Gaze Interaction** *(Optional — enable only if your app uses eye tracking)*
+
+- **Spatial Graph Node**
+*(Required for spatial anchors and world-locked content)*
+
+![alt text](doc\images\OpenXR.png)
+
+Additional features may be enabled depending on MRTK UI components or application requirements.
+
+## 2. Clone the Project
+```bash
+git clone https://github.com/ImJAiiiii/MR-3DPrinter-HoloLens.git
+cd MR-3DPrinter-HoloLens
+```
+
+## 4. Set Backend API URL (IMPORTANT)
+To change the backend IP inside Unity, you must update the BackendSettings asset that is connected to your scene through the Backend Config object.
+
+### Step 1 — Select “Backend Config” in the Hierarchy
+Hierarchy path:
+``` nginx
+SampleScene
+ └── Backend Config
+```
+![alt text](doc\images\BackendConfig.png)
+
+### Step 2 — In the Inspector, open the “BackendSettings” asset
+In Inspector → **Global Backend (Script)**:
+
+- Find the field **Settings Asset**
+
+- Click the small circle (or click the object)
+
+- This opens **BackendSettings** (a ScriptableObject)
+
+![alt text](doc\images\BackendInspector.png)
+
+### Step 3 — Inside BackendSettings, update the backend IP
+You will see fields like:
+
+- **Backend Base**
+
+- **Default Printer Id**
+
+- **Token**
+
+- **Admin Token**
+
+- Endpoints, etc.
+
+Change **Backend Base** to your new backend IP:
+``` cpp
+http://<BACKEND_IP>:8000
+```
+This is the **official place to update the backend URL**.
+
+## 5. Update Camera Snapshot URL
+Hierarchy:
+``` nginx
+SampleScene
+ └── MJPEGStreamManager
+```
+![alt text](doc\images\MJPEG.png)
+
+Inspector → UsbCamPoller → **Base Url**:
+``` arduino
+http://<PI_IP>:8000/snapshot.jpg
+```
+![alt text](doc\images\SnapshotURL.png)
+
+## 6. Build on HoloLens2
+Follow the steps below to build and deploy the Unity project to a HoloLens 2 device.
+
+### 6.1 Configure Build Settings in Unity
+
+1. Open **File → Build Settings**  
+2. Select **Universal Windows Platform (UWP)**  
+3. Click **Switch Platform**
+
+Configure the settings:
+
+- **Target Device:** HoloLens  
+- **Architecture:** ARM64  
+- **Build Type:** D3D  
+- **Target SDK:** Latest Installed  
+- **Minimum Platform Version:** 10.0.19041.0 (or higher)  
+- **Scripting Backend:** IL2CPP  
+- **C# Projects:** Enabled (optional, useful for debugging)
+
+### 6.2 Enable Required Capabilities
+
+Open:
+
+**Edit → Project Settings → Player → Publishing Settings**
+
+Enable:
+
+- **InternetClient**  
+- **PrivateNetworkClientServer**  
+- **SpatialPerception** (if using spatial anchors or world-locked UI)
+
+### 6.3 Build the Project
+
+1. Open **File → Build Settings**  
+2. Click **Build**  
+3. Select an empty folder (e.g., `AppBuild/`)  
+4. Unity will generate a Visual Studio solution (`.sln`)
+
+### 6.4 Open in Visual Studio 2022
+
+1. Open the generated `.sln` file  
+2. Select build configuration:
+   - **Solution Configuration:** Release  
+   - **Solution Platform:** ARM64  
+   - **Deployment Target:** Device  
+
+### 6.5 Deploy to HoloLens 2
+
+#### **Option A — USB Deployment**
+
+1. Connect HoloLens 2 to PC via USB  
+2. Ensure **Developer Mode** is enabled on the device  
+3. In Visual Studio, click:
+   **Debug → Start Without Debugging (Ctrl+F5)**  
+4. The app will install and launch automatically
+
+#### **Option B — Wi-Fi / Device Portal Deployment**
+
+1. Enable **Device Portal** on HoloLens  
+2. Find device IP:  
+   **Settings → Network & Internet → Wi-Fi → Advanced**  
+3. In Visual Studio, set target to **Remote Machine**  
+4. Enter the HoloLens IP address  
+5. Deploy the app
+
+### 6.6 Verify the Build
+
+After installation, check:
+
+- App launches correctly  
+- Backend communication works  
+- Camera feed loads  
+- Hand interaction responds properly  
+- Spatial UI anchors correctly (if applicable)
+
+If something does not work, refer to the **Troubleshooting** section below.
+## 7. Troubleshooting
+
+### 7.1 MRTK / Unity Not Working
+**Problem**: MRTK not showing, profiles missing, UI not responding
+**Fix**:
+
+- Ensure MRTK3 was installed via **Mixed Reality Feature Tool**
+
+- Enable **OpenXR** under XR Plugin Management
+
+- Enable **Microsoft Hand Interaction Profile**
+### 7.2 OpenXR Red Warnings
+**Problem:** Unity shows red OpenXR warnings  
+**Fix:**
+- Go to *Project Settings → OpenXR* → click **Fix All**  
+- Enable required features:  
+  - Hand Interaction  
+  - Spatial Graph Node
+
+
+### 7.3 UWP Build Fails
+**Problem:** Unity or Visual Studio build errors  
+**Fix:**
+- Install Unity modules: **UWP Build Support**, **IL2CPP**  
+- Install Windows 10/11 SDK  
+- Ensure Visual Studio workloads:  
+  - UWP Development  
+  - Desktop development with C++  
+  - Game development with Unity
+
+### 7.4 Cannot Deploy to HoloLens
+**Problem:** Device not detected or deployment fails  
+**Fix:**
+- Enable *Developer Mode* + *Device Portal* on HoloLens  
+- Install "USB Device Connectivity" in Visual Studio  
+- Build with **ARM64** + **Release**
+
+### 7.5 HoloLens Cannot Connect to Backend
+**Problem:** Queue not loading or missing data  
+**Fix:**
+- Update **Backend Base** in BackendSettings:
+``` cpp
+http://<BACKEND_IP>:8000
+```
+- Ensure HoloLens is on the same Wi-Fi network as the backend  
+
+### 7.6 Camera Feed Not Showing
+**Problem:** Black screen or no image updates  
+**Fix:**
+- Update snapshot Base Url:
+``` cpp
+http://<PI_IP>:8000/snapshot.jpg
+```
+### 7.7 Hand Interaction Not Working
+**Problem:** Buttons cannot be pressed / hand tracking not detected  
+**Fix:**
+- Ensure MRTK XR Rig is present in the scene  
+- Enable **Hand Interaction Profile** in OpenXR  
+- Disable any Legacy XR plugins
