@@ -1,5 +1,30 @@
 # 3D Printing Management and Monitoring Platform with Web Interface and Mixed Reality
 
+## Table of Contents
+
+1. [ภาพรวมระบบ (Overview)](#1-ภาพรวมระบบ-overview)
+2. [Features](#2-features)
+3. [Repository Structure](#3-repository-structure)
+4. [Backend Architecture](#4-backend-architecture)
+5. [Frontend Architecture](#5-frontend-architecture)
+6. [Environment & Dependencies](#6-environment--dependencies)
+7. [Configuration](#7-configuration)
+8. [Running Locally](#8-running-locally)
+9. [Data & Maintenance](#9-data--maintenance)
+10. [cleanup_db.bat + Task Scheduler](#10cleanup_dbbat--task-scheduler-ลบข้อมูลอัตโนมัติบน-windows)
+11. [Known Issues & Troubleshooting](#11-known-issues--troubleshooting)
+12. [Raspberry Pi Setup (Detection System)](#raspberry-pi-setup-detection-system)
+    - [Update IP inside detect-stream.service](#1-update-ip-inside-detect-streamservice)
+    - [Troubleshooting – Raspberry Pi](#2-troubleshooting--raspberry-pi-detection--camera--octoprint)
+13. [Unity + HoloLens Setup](#unity--hololens-setup)
+    - [Installing Tools for MRTK Development](#1-installing-tools-for-mrtk-development)
+    - [HoloLens 2 Configuration in Unity](#2-hololens-2-configuration-in-unity)
+    - [Clone the Project](#3-clone-the-project)
+    - [Set Backend API URL](#4-set-backend-api-url-important)
+    - [Update Camera Snapshot URL](#5-update-camera-snapshot-url)
+    - [Build on HoloLens2](#6-build-on-hololens2)
+    - [Troubleshooting](#7-troubleshooting)
+
 ระบบนี้คือ **Web Console สำหรับควบคุมและมอนิเตอร์เครื่องพิมพ์ 3D** ประกอบด้วย:
 
 - **Backend**: FastAPI + SQLite + MinIO/S3 + OctoPrint + PrusaSlicer CLI  
@@ -963,6 +988,8 @@ Install one of the following:
 
 - **Windows 11** (recommended)
 
+---
+
 ### 1.2 Installing Visual Studio 2022
 Visual Studio 2022 is required for:
 
@@ -994,6 +1021,8 @@ or Windows 11 SDK
 
 Ensure all these components are installed before building a HoloLens application from Unity.
 
+---
+
 ### 1.3 Installing the Mixed Reality Toolkit (MRTK)
 MRTK provides essential UI, input, and interaction components for HoloLens development.
 
@@ -1023,6 +1052,8 @@ Use a Unity version that supports MRTK3 and HoloLens 2:
 
 - Unity 2021.3 LTS (legacy compatibility)
 
+---
+
 ### 2.2 Install Required Unity Modules
 During Unity installation (or later via Unity Hub), enable:
 
@@ -1032,7 +1063,9 @@ During Unity installation (or later via Unity Hub), enable:
 
 These modules are required for building UWP apps and deploying to HoloLens 2.
 
-## 2.3 Configure OpenXR
+---
+
+### 2.3 Configure OpenXR
 
 OpenXR must be enabled as the primary XR backend.
 
@@ -1046,7 +1079,9 @@ OpenXR must be enabled as the primary XR backend.
 
 3. Under the **UWP** tab, select **OpenXR** as the active XR provider
 
-## 2.4 Configure OpenXR Features
+---
+
+### 2.4 Configure OpenXR Features
 After selecting OpenXR:
 
 1. Navigate to
@@ -1069,7 +1104,7 @@ After selecting OpenXR:
 
 Additional features may be enabled depending on MRTK UI components or application requirements.
 
-## 2. Clone the Project
+## 3. Clone the Project
 ```bash
 git clone https://github.com/ImJAiiiii/MR-3DPrinter-HoloLens.git
 cd MR-3DPrinter-HoloLens
@@ -1087,6 +1122,8 @@ SampleScene
 
 <img src="doc\images\BackendConfig.png" alt="Choose Bundle Folder" width="400" />
 
+---
+
 ### Step 2 — In the Inspector, open the “BackendSettings” asset
 In Inspector → **Global Backend (Script)**:
 
@@ -1097,6 +1134,8 @@ In Inspector → **Global Backend (Script)**:
 - This opens **BackendSettings** (a ScriptableObject)
 
 <img src="doc\images\BackendInspector.png" alt="Choose Bundle Folder" width="800" />
+
+---
 
 ### Step 3 — Inside BackendSettings, update the backend IP
 You will see fields like:
@@ -1149,7 +1188,7 @@ Configure the settings:
 - **Minimum Platform Version:** 10.0.19041.0 (or higher)  
 - **Scripting Backend:** IL2CPP  
 - **C# Projects:** Enabled (optional, useful for debugging)
-
+---
 ### 6.2 Enable Required Capabilities
 
 Open:
@@ -1161,14 +1200,14 @@ Enable:
 - **InternetClient**  
 - **PrivateNetworkClientServer**  
 - **SpatialPerception** (if using spatial anchors or world-locked UI)
-
+---
 ### 6.3 Build the Project
 
 1. Open **File → Build Settings**  
 2. Click **Build**  
 3. Select an empty folder (e.g., `AppBuild/`)  
 4. Unity will generate a Visual Studio solution (`.sln`)
-
+---
 ### 6.4 Open in Visual Studio 2022
 
 1. Open the generated `.sln` file  
@@ -1176,7 +1215,7 @@ Enable:
    - **Solution Configuration:** Release  
    - **Solution Platform:** ARM64  
    - **Deployment Target:** Device  
-
+---
 ### 6.5 Deploy to HoloLens 2
 
 #### **Option A — USB Deployment**
@@ -1195,7 +1234,7 @@ Enable:
 3. In Visual Studio, set target to **Remote Machine**  
 4. Enter the HoloLens IP address  
 5. Deploy the app
-
+---
 ### 6.6 Verify the Build
 
 After installation, check:
@@ -1207,6 +1246,7 @@ After installation, check:
 - Spatial UI anchors correctly (if applicable)
 
 If something does not work, refer to the **Troubleshooting** section below.
+
 ## 7. Troubleshooting
 
 ### 7.1 MRTK / Unity Not Working
@@ -1218,6 +1258,7 @@ If something does not work, refer to the **Troubleshooting** section below.
 - Enable **OpenXR** under XR Plugin Management
 
 - Enable **Microsoft Hand Interaction Profile**
+---
 ### 7.2 OpenXR Red Warnings
 **Problem:** Unity shows red OpenXR warnings  
 **Fix:**
@@ -1226,7 +1267,7 @@ If something does not work, refer to the **Troubleshooting** section below.
   - Hand Interaction  
   - Spatial Graph Node
 
-
+---
 ### 7.3 UWP Build Fails
 **Problem:** Unity or Visual Studio build errors  
 **Fix:**
@@ -1236,14 +1277,14 @@ If something does not work, refer to the **Troubleshooting** section below.
   - UWP Development  
   - Desktop development with C++  
   - Game development with Unity
-
+---
 ### 7.4 Cannot Deploy to HoloLens
 **Problem:** Device not detected or deployment fails  
 **Fix:**
 - Enable *Developer Mode* + *Device Portal* on HoloLens  
 - Install "USB Device Connectivity" in Visual Studio  
 - Build with **ARM64** + **Release**
-
+---
 ### 7.5 HoloLens Cannot Connect to Backend
 **Problem:** Queue not loading or missing data  
 **Fix:**
@@ -1252,7 +1293,7 @@ If something does not work, refer to the **Troubleshooting** section below.
 http://<BACKEND_IP>:8000
 ```
 - Ensure HoloLens is on the same Wi-Fi network as the backend  
-
+---
 ### 7.6 Camera Feed Not Showing
 **Problem:** Black screen or no image updates  
 **Fix:**
@@ -1260,6 +1301,7 @@ http://<BACKEND_IP>:8000
 ``` cpp
 http://<PI_IP>:8000/snapshot.jpg
 ```
+---
 ### 7.7 Hand Interaction Not Working
 **Problem:** Buttons cannot be pressed / hand tracking not detected  
 **Fix:**
