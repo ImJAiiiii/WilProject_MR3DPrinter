@@ -1065,7 +1065,7 @@ After selecting OpenXR:
 - **Spatial Graph Node**
 *(Required for spatial anchors and world-locked content)*
 
-![alt text](doc\images\OpenXR.png)
+<img src="doc\images\OpenXR.png" alt="Choose Bundle Folder" width="800" />
 
 Additional features may be enabled depending on MRTK UI components or application requirements.
 
@@ -1084,7 +1084,8 @@ Hierarchy path:
 SampleScene
  └── Backend Config
 ```
-![alt text](doc\images\BackendConfig.png)
+
+<img src="doc\images\BackendConfig.png" alt="Choose Bundle Folder" width="400" />
 
 ### Step 2 — In the Inspector, open the “BackendSettings” asset
 In Inspector → **Global Backend (Script)**:
@@ -1095,7 +1096,7 @@ In Inspector → **Global Backend (Script)**:
 
 - This opens **BackendSettings** (a ScriptableObject)
 
-![alt text](doc\images\BackendInspector.png)
+<img src="doc\images\BackendInspector.png" alt="Choose Bundle Folder" width="800" />
 
 ### Step 3 — Inside BackendSettings, update the backend IP
 You will see fields like:
@@ -1122,13 +1123,13 @@ Hierarchy:
 SampleScene
  └── MJPEGStreamManager
 ```
-![alt text](doc\images\MJPEG.png)
+<img src="doc\images\MJPEG.png" alt="Choose Bundle Folder" width="400" />
 
 Inspector → UsbCamPoller → **Base Url**:
 ``` arduino
 http://<PI_IP>:8000/snapshot.jpg
 ```
-![alt text](doc\images\SnapshotURL.png)
+<img src="doc\images\SnapshotURL.png" alt="Choose Bundle Folder" width="800" />
 
 ## 6. Build on HoloLens2
 Follow the steps below to build and deploy the Unity project to a HoloLens 2 device.
